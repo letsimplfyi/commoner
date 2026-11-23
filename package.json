@@ -9,6 +9,7 @@
     "test:e2e": "node --test tests/e2e/*.e2e.mjs",
     "test:all": "npm test && npm run test:e2e",
     "brand": "node tools/sync-brand.mjs",
-    "brand:check": "node tools/sync-brand.mjs --check"
+    "brand:check": "node tools/sync-brand.mjs --check",
+    "popular:check": "node tools/check-popular.mjs"
   }
 }

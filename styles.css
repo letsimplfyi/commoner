@@ -59,3 +59,12 @@ form .ls-btn { width: 100%; }
 
 .toast-wrap { position: fixed; z-index: 20; left: 0; right: 0; bottom: calc(var(--space-5) + env(safe-area-inset-bottom)); display: flex; justify-content: center; pointer-events: none; }
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; transition: none !important; } }
+
+/* Suggestions under the search box, and the popular lists */
+.suggest { margin: 0 0 var(--space-4); padding: 0; list-style: none; border: var(--rule); }
+.suggest li + li { border-top: 1px solid var(--line); }
+.suggest a { display: block; padding: var(--space-3) var(--space-4); min-height: var(--touch-preferred); overflow-wrap: anywhere; }
+.popular { margin-bottom: var(--space-4); }
+.popular .ls-tag { padding: var(--space-2) var(--space-3); }
+
+button.quiet { min-height: var(--touch-preferred); padding: 0 var(--space-1); color: var(--ink); background: none; border: 0; font: inherit; text-decoration: underline; text-underline-offset: 4px; cursor: pointer; }

@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { POPULAR, allPopular, randomCategory } from '../js/popular.js';
+import { suggestUrl, normaliseSuggestions } from '../js/commons.js';
 import { parseCategory, pageUrl, shareUrl, listUrl, infoUrl, gridSrc, viewSrc, resize, plain, displayTitle, normaliseFiles, normaliseInfo, getJson, CommonsError } from '../js/commons.js';
 import { page, listResponse } from './fixtures.js';
 
@@ -71,4 +73,25 @@ test('getJson separates network, http and api errors and never sends credentials
   await assert.rejects(getJson('https://x', { fetchImpl: async () => ({ ok: true, json: async () => ({ error: { info: 'bad' } }) }) }), e => e.kind === 'api' && e.message === 'bad');
   const ac = new AbortController(); ac.abort();
   await assert.rejects(getJson('https://x', { signal: ac.signal, fetchImpl: async () => { throw new DOMException('aborted', 'AbortError'); } }), e => e.name === 'AbortError');
+});
+
+test('a shared Commoner link pasted back in opens the same category', () => {
+  assert.equal(parseCategory('https://commoner.letsimpl.fyi/?c=Photos+taken+by+Vysakh+Premkumar&f=x.jpg'), 'Photos taken by Vysakh Premkumar');
+  assert.equal(parseCategory('http://localhost:8080/?c=Sunsets'), 'Sunsets');
+  assert.equal(parseCategory('https://commoner.letsimpl.fyi/'), '');
+  assert.equal(parseCategory('https://evil.example/?c=Sunsets'), '');
+});
+test('category suggestions use the Commons prefix search on the Category namespace', () => {
+  const p = new URL(suggestUrl('Swayamb')).searchParams;
+  assert.equal(p.get('list'), 'prefixsearch'); assert.equal(p.get('psnamespace'), '14'); assert.equal(p.get('pssearch'), 'Swayamb'); assert.equal(p.get('origin'), '*');
+  assert.deepEqual(normaliseSuggestions({ query: { prefixsearch: [{ title: 'Category:Swayambhunath' }, { title: 'Category:Swayambhu Ganpati Temple' }] } }), ['Swayambhunath', 'Swayambhu Ganpati Temple']);
+  assert.deepEqual(normaliseSuggestions({}), []);
+});
+test('the popular list is short, unique and made only of valid category names', () => {
+  const all = allPopular();
+  assert.ok(all.length >= 10 && all.length <= 30, 'short enough to scan');
+  assert.equal(new Set(all.map(n => n.toLowerCase())).size, all.length, 'no duplicates');
+  for (const name of all) assert.equal(parseCategory(name), name, name);
+  assert.ok(POPULAR.every(g => g.title && g.items.length > 0));
+  assert.ok(all.includes(randomCategory(() => 0)) && all.includes(randomCategory(() => 0.999)));
 });

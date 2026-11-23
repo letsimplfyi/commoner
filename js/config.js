@@ -1,5 +1,5 @@
-// Bump APP_VERSION with the service-worker cache version (sw.js) on release.
-export const APP_VERSION = '2026.11.24-1';
+// APP_VERSION and the cache name in sw.js are stamped together by the deploy workflow on every release.
+export const APP_VERSION = 'dev';
 export const REPO_URL = 'https://github.com/letsimplfyi/commoner';
 export const LETSIMPL_URL = 'https://letsimpl.fyi';
 export const COMMONS_API = 'https://commons.wikimedia.org/w/api.php';

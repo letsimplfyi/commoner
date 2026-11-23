@@ -21,12 +21,10 @@ test('app styles follow the brand rules: no own colours, shadows, gradients, rou
   assert.ok(!/@font-face|font-family/.test(css), 'fonts come from the brand');
 });
 
-test('no inline scripts, styles or event handlers; no service worker; CSP allows only Commons', () => {
+test('no inline scripts, styles or event handlers; CSP allows only Commons', () => {
   const html = read('index.html');
   assert.ok(!/<script(?![^>]*\bsrc=)[^>]*>[^<]/.test(html), 'no inline script');
   assert.ok(!/<style[\s>]/.test(html) && !/\sstyle="/.test(html) && !/\son[a-z]+="/.test(html));
-  assert.ok(!existsSync(new URL('../sw.js', import.meta.url)), 'no service worker');
-  assert.ok(!/serviceWorker/.test(readdirSync(new URL('../js/', import.meta.url)).map(f => read(`js/${f}`)).join('')));
   const csp = read('_headers').match(/Content-Security-Policy: (.*)/)[1];
   assert.match(csp, /default-src 'self'/); assert.match(csp, /script-src 'self'(;|$)/); assert.match(csp, /style-src 'self'(;|$)/);
   assert.match(csp, /connect-src 'self' https:\/\/commons\.wikimedia\.org(;|$)/); assert.match(csp, /img-src 'self' data: https:\/\/upload\.wikimedia\.org https:\/\/thumb\.wikimedia\.org(;|$)/);

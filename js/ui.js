@@ -1,8 +1,10 @@
 import { h, Component } from '../vendor/preact.module.js';
 import htm from '../vendor/htm.module.js';
 import { APP_VERSION, REPO_URL, LETSIMPL_URL, RECENT_KEEP } from './config.js';
-import { parseCategory, fetchInfo, fetchFiles, gridSrc, viewSrc, displayTitle, shareUrl, pageUrl } from './commons.js';
+import { POPULAR, randomCategory } from './popular.js';
+import { parseCategory, fetchInfo, fetchFiles, fetchSuggestions, gridSrc, viewSrc, displayTitle, shareUrl, pageUrl } from './commons.js';
 import { Icon } from './icons.js';
+import { updateState, checkForUpdate, apply, justUpdated } from './update.js';
 const html = htm.bind(h);
 
 const MAX_DEEP_LINK_PAGES = 5;
@@ -18,15 +20,24 @@ function Notice({ kind = 'info', icon = 'info', children }) {
 
 export class App extends Component {
   state = { c: '', f: '', info: null, files: [], next: null, status: 'idle', error: null, sort: 'name', viewer: null, toast: '',
-    recent: readRecent(), input: '', inputError: '', theme: document.documentElement.dataset.theme || 'light', skipped: 0 };
+    recent: readRecent(), input: '', inputError: '', suggestions: [], similar: [], theme: document.documentElement.dataset.theme || 'light', skipped: 0 };
   abort = null; pages = 0; toastTimer = 0; io = null;
 
   componentDidMount() {
     addEventListener('popstate', this.onPop);
+    addEventListener('commoner-update', this.refresh);
+    if (justUpdated()) this.toast(`Updated to ${APP_VERSION}`);
     const route = readRoute();
     if (route.c) this.load(route.c, route.f, { push: false });
   }
-  componentWillUnmount() { removeEventListener('popstate', this.onPop); this.io?.disconnect(); }
+  refresh = () => this.forceUpdate();
+  checkUpdates = async () => {
+    this.setState({ checking: true });
+    const result = await checkForUpdate({ force: true });
+    this.setState({ checking: false });
+    this.toast(result === 'ready' ? 'Update found. Restarting when you are done.' : result === 'offline' ? 'Could not check. You are offline.' : result === 'skipped' ? 'Updates need HTTPS and site storage.' : 'You have the latest version.');
+  };
+  componentWillUnmount() { removeEventListener('commoner-update', this.refresh); removeEventListener('popstate', this.onPop); this.io?.disconnect(); }
 
   onPop = () => {
     const route = readRoute();
@@ -60,7 +71,8 @@ export class App extends Component {
     this.pages = 0;
     if (push) history.pushState({}, '', shareUrl(location.href, c));
     document.title = `${c} · Commoner`;
-    this.setState({ c, f, info: null, files: [], next: null, status: 'loading', error: null, viewer: null, sort, skipped: 0 });
+    this.similarFor = '';
+    this.setState({ c, f, info: null, files: [], next: null, status: 'loading', error: null, viewer: null, sort, skipped: 0, similar: [], suggestions: [] });
     this.remember(c);
     fetchInfo(c, { signal: ac.signal }).then(info => { if (this.state.c === c) this.setState({ info }); }).catch(() => {});
     try { this.addPage(await fetchFiles(c, { sort, signal: ac.signal }), c); }
@@ -127,9 +139,38 @@ export class App extends Component {
     event.preventDefault();
     const name = parseCategory(this.state.input);
     if (!name) { this.setState({ inputError: 'That is not a Commons category. Use a name such as Photos taken by Vysakh Premkumar, or a link to a Category page on commons.wikimedia.org.' }); return; }
-    this.setState({ inputError: '', input: '' });
+    this.setState({ inputError: '', input: '', suggestions: [] });
     this.load(name);
   };
+  suggestTimer = 0; suggestAbort = null; similarFor = '';
+  onInput = event => {
+    const input = event.target.value;
+    this.setState({ input, inputError: '' });
+    clearTimeout(this.suggestTimer);
+    this.suggestAbort?.abort();
+    const query = input.trim();
+    if (query.length < 2 || /^https?:/i.test(query)) { this.setState({ suggestions: [] }); return; }
+    this.suggestTimer = setTimeout(async () => {
+      const ac = this.suggestAbort = new AbortController();
+      try { const list = await fetchSuggestions(query.replace(/^category:/i, ''), { signal: ac.signal }); if (!ac.signal.aborted) this.setState({ suggestions: list }); }
+      catch { /* suggestions are a convenience; typing and Open still work without them */ }
+    }, 250);
+  };
+  surprise = () => this.load(randomCategory());
+  copyLink = async () => {
+    const url = shareUrl(location.href, this.state.c);
+    try { await navigator.clipboard.writeText(url); this.toast('Link copied'); } catch { this.toast(url); }
+  };
+  findSimilar(c) {
+    this.similarFor = c;
+    const words = c.split(/\s+/);
+    const tries = [c, words.slice(0, Math.max(1, words.length - 1)).join(' '), words[0]].filter((q, i, all) => q.length >= 2 && all.indexOf(q) === i);
+    (async () => {
+      for (const q of tries) {
+        try { const list = (await fetchSuggestions(q)).filter(name => name !== c); if (list.length && this.state.c === c) { this.setState({ similar: list }); return; } } catch { return; }
+      }
+    })();
+  }
   openCategory = name => event => { event.preventDefault(); this.load(name); };
   clearRecent = () => { writeRecent([]); this.setState({ recent: [] }); };
   changeSort = sort => { if (sort !== this.state.sort) this.load(this.state.c, '', { push: false, sort }); };
@@ -141,20 +182,27 @@ export class App extends Component {
   };
 
   renderHome() {
-    const { input, inputError, recent } = this.state;
+    const { input, inputError, recent, suggestions } = this.state;
     return html`<section>
       <h1>Open a category</h1>
-      <p class="ls-prose">Type or paste a Wikimedia Commons category and see its photos as a gallery. Tap one to swipe through them.</p>
+      <p class="ls-prose">Start typing a Wikimedia Commons category, pick a suggestion or one of the popular ones below, and see its photos as a gallery. Tap a photo to swipe through them.</p>
       <form onSubmit=${this.submit} novalidate>
         <div class="ls-field">
           <label for="category">Category name or link</label>
           <input id="category" class="ls-input" type="text" inputmode="url" autocapitalize="off" autocomplete="off" spellcheck="false"
-            value=${input} onInput=${e => this.setState({ input: e.target.value })} aria-invalid=${inputError ? 'true' : 'false'} aria-describedby="category-hint category-error" />
+            value=${input} onInput=${this.onInput} aria-invalid=${inputError ? 'true' : 'false'} aria-describedby="category-hint category-error" />
           <span class="ls-hint" id="category-hint">Example: Photos taken by Vysakh Premkumar</span>
           ${inputError && html`<span class="ls-callout ls-callout--error" id="category-error" role="alert"><${Icon} name="alert" /><span>${inputError}</span></span>`}
         </div>
-        <button class="ls-btn ls-btn--primary" type="submit">Open</button>
+        ${suggestions.length > 0 && html`<ul class="suggest" aria-label="Suggested categories">${suggestions.map(name => html`<li><a href=${shareUrl(location.href, name)} onClick=${this.openCategory(name)}>${name}</a></li>`)}</ul>`}
+        <div class="actions">
+          <button class="ls-btn ls-btn--primary" type="submit">Open</button>
+          <button class="ls-btn" type="button" onClick=${this.surprise}>Surprise me</button>
+        </div>
       </form>
+      <h2>Popular</h2>
+      ${POPULAR.map(group => html`<h3>${group.title}</h3>
+        <ul class="ls-tags popular">${group.items.map(name => html`<li><a class="ls-tag" href=${shareUrl(location.href, name)} onClick=${this.openCategory(name)}>${name}</a></li>`)}</ul>`)}
       ${recent.length > 0 && html`<h2>Recent</h2>
         <ul class="recent">${recent.map(name => html`<li><a href=${shareUrl(location.href, name)} onClick=${this.openCategory(name)}>${name}</a></li>`)}</ul>
         <button class="ls-btn ls-btn--small" type="button" onClick=${this.clearRecent}>Clear recent</button>`}
@@ -164,15 +212,17 @@ export class App extends Component {
   }
 
   renderGallery() {
-    const { c, info, files, next, status, error, sort, skipped } = this.state;
+    const { c, info, files, next, status, error, sort, skipped, similar } = this.state;
     const url = shareUrl(location.href, c);
     const missing = info && !info.exists;
+    if (missing && this.similarFor !== c) this.findSimilar(c);
     return html`<section>
       <p><a class="back" href="./" onClick=${this.goHome}><${Icon} name="back" /> Open another category</a></p>
       <h1>${c}</h1>
       <p class="meta">${info ? `${info.files} ${info.files === 1 ? 'file' : 'files'}` : status === 'loading' ? 'Loading' : ''}${skipped ? `, ${skipped} not shown (not photos)` : ''}</p>
       <div class="actions">
-        <button class="ls-btn ls-btn--small" type="button" onClick=${() => this.share(c, url)}><${Icon} name="share" small /> Share</button>
+        ${navigator.share && html`<button class="ls-btn ls-btn--small" type="button" onClick=${() => this.share(c, url)}><${Icon} name="share" small /> Share</button>`}
+        <button class="ls-btn ls-btn--small" type="button" onClick=${this.copyLink}><${Icon} name="link" small /> Copy link</button>
         <a class="ls-btn ls-btn--small ls-btn--outbound" href=${pageUrl(`Category:${c}`)} target="_blank" rel="noopener noreferrer">Open on Commons</a>
         <div class="segmented" role="group" aria-label="Sort">
           <button type="button" class="ls-btn ls-btn--small" aria-pressed=${sort === 'name'} onClick=${() => this.changeSort('name')}>Name</button>
@@ -182,7 +232,7 @@ export class App extends Component {
       ${info?.subcats.length > 0 && html`<ul class="ls-tags">${info.subcats.map(name => html`<li><a class="ls-tag" href=${shareUrl(location.href, name)} onClick=${this.openCategory(name)}>${name}</a></li>`)}</ul>`}
       ${status === 'loading' && html`<p class="status" role="status">Loading photos</p>`}
       ${status === 'error' && html`<${Notice} kind="error" icon="alert">${error?.message || 'Something went wrong.'} <button class="ls-btn ls-btn--small" type="button" onClick=${() => this.load(c, '', { push: false })}><${Icon} name="retry" small /> Try again</button><//>`}
-      ${status !== 'loading' && status !== 'error' && files.length === 0 && !next && html`<${Notice} kind=${missing ? 'warning' : 'info'} icon=${missing ? 'alert' : 'info'}>${missing ? html`There is no category called <b>${c}</b> on Commons. Check the spelling.` : 'This category has no photos.'}<//>`}
+      ${status !== 'loading' && status !== 'error' && files.length === 0 && !next && html`<${Notice} kind=${missing ? 'warning' : 'info'} icon=${missing ? 'alert' : 'info'}>${missing ? html`There is no category called <b>${c}</b> on Commons. Check the spelling.${similar.length > 0 && html` Did you mean:<ul class="ls-tags">${similar.map(name => html`<li><a class="ls-tag" href=${shareUrl(location.href, name)} onClick=${this.openCategory(name)}>${name}</a></li>`)}</ul>`}` : 'This category has no photos.'}<//>`}
       <div class="grid">${files.map((file, i) => html`<button type="button" class="tile" onClick=${() => this.openViewer(i)} aria-label=${displayTitle(file.name)}>
         <img src=${gridSrc(file)} alt="" loading=${i < 12 ? 'eager' : 'lazy'} decoding="async" width=${GRID_W} height=${GRID_W} /></button>`)}</div>
       ${status === 'more' && html`<p class="status" role="status">Loading more</p>`}
@@ -204,7 +254,7 @@ export class App extends Component {
       <main id="main" class="page">${c ? this.renderGallery() : this.renderHome()}</main>
       <footer class="page foot">
         <p>Commoner is not endorsed by or affiliated with the Wikimedia Foundation. Photos and data come from Wikimedia Commons, and every file keeps its own licence, shown in the viewer.</p>
-        <p><a href=${REPO_URL} target="_blank" rel="noopener noreferrer">Source</a> · AGPL-3.0-or-later · <a href=${LETSIMPL_URL} target="_blank" rel="noopener noreferrer">Part of letsimpl.fyi</a> · ${APP_VERSION}</p>
+        <p><a href=${REPO_URL} target="_blank" rel="noopener noreferrer">Source</a> · AGPL-3.0-or-later · <a href=${LETSIMPL_URL} target="_blank" rel="noopener noreferrer">Part of letsimpl.fyi</a> · ${APP_VERSION}${updateState.ready ? html` · <button class="quiet" type="button" onClick=${apply}>Update ready: restart now</button>` : html` · <button class="quiet" type="button" disabled=${this.state.checking} onClick=${this.checkUpdates}>Check for updates</button>`}</p>
       </footer>
       ${viewer !== null && files[viewer] && html`<${Viewer} files=${files} index=${viewer} onIndex=${this.setViewerIndex} onClose=${this.closeViewer} onShare=${this.share} category=${c} />`}
       <div class="toast-wrap" role="status">${toast && html`<span class="ls-toast">${toast}</span>`}</div>`;

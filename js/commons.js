@@ -1,5 +1,8 @@
 import { COMMONS_API, COMMONS_WIKI, PAGE_SIZE, GRID_WIDTH, VIEW_WIDTH, FETCH_TIMEOUT_MS } from './config.js';
 
+// A shared Commoner link pasted back into the box is accepted too.
+const OWN_HOSTS = /^(commoner\.letsimpl\.fyi|commoner-[a-z0-9]+\.pages\.dev|localhost|127\.0\.0\.1)$/;
+
 // Accepts "Foo", "Category:Foo", "[[Category:Foo]]" or a commons.wikimedia.org
 // category link, and returns the bare category name ('' when it is not one).
 export function parseCategory(input) {
@@ -8,6 +11,7 @@ export function parseCategory(input) {
   if (/^https?:\/\//i.test(s)) {
     let url;
     try { url = new URL(s); } catch { return ''; }
+    if (OWN_HOSTS.test(url.hostname)) return url.searchParams.has('c') ? parseCategory(url.searchParams.get('c')) : '';
     if (!/^commons(\.m)?\.wikimedia\.org$/.test(url.hostname)) return '';
     let title = url.searchParams.get('title');
     if (!title) { try { title = decodeURIComponent(url.pathname.replace(/^\/wiki\//, '')); } catch { return ''; } }
@@ -35,6 +39,11 @@ const api = params => `${COMMONS_API}?${new URLSearchParams({ action: 'query', f
 export function infoUrl(name) {
   return api({ titles: categoryTitle(name), prop: 'categoryinfo', list: 'categorymembers', cmtitle: categoryTitle(name), cmtype: 'subcat', cmlimit: '24' });
 }
+
+export function suggestUrl(query, limit = 8) {
+  return api({ list: 'prefixsearch', pssearch: query, psnamespace: '14', pslimit: String(limit) });
+}
+export const normaliseSuggestions = json => (json?.query?.prefixsearch || []).map(p => p.title.replace(/^Category:/, ''));
 
 export function listUrl(name, { sort = 'name', cont = null } = {}) {
   const newest = sort === 'newest';
@@ -107,3 +116,4 @@ export async function getJson(url, { signal, fetchImpl = fetch } = {}) {
 
 export const fetchInfo = (name, options) => getJson(infoUrl(name), options).then(normaliseInfo);
 export const fetchFiles = (name, { sort, cont, ...options } = {}) => getJson(listUrl(name, { sort, cont }), options).then(normaliseFiles);
+export const fetchSuggestions = (query, options) => getJson(suggestUrl(query), options).then(normaliseSuggestions);

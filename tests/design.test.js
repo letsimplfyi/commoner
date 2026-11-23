@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, existsSync, readdirSync } from 'node:fs';
 const read = path => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
-const ALLOWED_HOSTS = new Set(['commons.wikimedia.org', 'upload.wikimedia.org', 'thumb.wikimedia.org', 'commoner.letsimpl.fyi', 'letsimpl.fyi', 'github.com', 'brand.letsimpl.fyi', 'www.w3.org', 'example.org']);
+const ALLOWED_HOSTS = new Set(['commons.wikimedia.org', 'api.wikimedia.org', 'upload.wikimedia.org', 'thumb.wikimedia.org', 'commoner.letsimpl.fyi', 'letsimpl.fyi', 'github.com', 'brand.letsimpl.fyi', 'www.w3.org', 'example.org']);
 
 test('branding is the vendored letsimpl.fyi brand, loaded before the app styles', () => {
   const meta = JSON.parse(read('brand/brand.json'));
@@ -14,7 +14,7 @@ test('branding is the vendored letsimpl.fyi brand, loaded before the app styles'
 
 test('app styles follow the brand rules: no own colours, shadows, gradients, rounded corners or fonts', () => {
   const css = read('styles.css').replace(/\/\*[\s\S]*?\*\//g, '');
-  assert.deepEqual([...css.matchAll(/#[\da-fA-F]{3,8}\b/g)], [], 'no literal colours');
+  assert.deepEqual([...css.matchAll(/#[\da-fA-F]{3,8}\b/g)].map(m => m[0].toLowerCase()), ['#ffffff'], 'only the QR code background may be a literal colour');
   assert.ok(!/box-shadow|drop-shadow|text-shadow/.test(css), 'no shadows');
   assert.ok(!/(linear|radial|conic)-gradient/.test(css), 'no gradients');
   assert.ok(!/border-radius:\s*[1-9]/.test(css), 'square corners');
@@ -27,7 +27,7 @@ test('no inline scripts, styles or event handlers; CSP allows only Commons', () 
   assert.ok(!/<style[\s>]/.test(html) && !/\sstyle="/.test(html) && !/\son[a-z]+="/.test(html));
   const csp = read('_headers').match(/Content-Security-Policy: (.*)/)[1];
   assert.match(csp, /default-src 'self'/); assert.match(csp, /script-src 'self'(;|$)/); assert.match(csp, /style-src 'self'(;|$)/);
-  assert.match(csp, /connect-src 'self' https:\/\/commons\.wikimedia\.org(;|$)/); assert.match(csp, /img-src 'self' data: https:\/\/upload\.wikimedia\.org https:\/\/thumb\.wikimedia\.org(;|$)/);
+  assert.match(csp, /connect-src 'self' https:\/\/commons\.wikimedia\.org https:\/\/api\.wikimedia\.org(;|$)/); assert.match(csp, /img-src 'self' data: https:\/\/upload\.wikimedia\.org https:\/\/thumb\.wikimedia\.org(;|$)/);
   assert.ok(!/unsafe-/.test(csp));
 });
 

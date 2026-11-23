@@ -47,7 +47,7 @@ export function startUpdates(changed = () => {}) {
     if (!hadController) return; // first install: this page is already current
     takenOver = true; markReady();
   });
-  navigator.serviceWorker.register('./sw.js').then(async reg => {
+  navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' }).then(async reg => {
     registration = reg;
     await navigator.serviceWorker.ready;
     markReady();

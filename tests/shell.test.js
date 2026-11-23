@@ -37,7 +37,7 @@ test('service worker: precaches every runtime file, versions its cache with the 
   const cache = sw.match(/const CACHE = 'commoner-shell-([^']+)'/)[1];
   assert.equal(cache, read('js/config.js').match(/APP_VERSION = '([^']+)'/)[1], 'CACHE and APP_VERSION must carry the same version (the deploy stamps both)');
   assert.match(sw, /cache: 'reload'/); assert.match(sw, /skipWaiting/); assert.match(sw, /SKIP_WAITING/); assert.match(sw, /url\.origin !== self\.location\.origin\) return/);
-  assert.match(read('js/main.js'), /startUpdates/); assert.match(read('js/update.js'), /register\('\.\/sw\.js'\)/);
+  assert.match(read('js/main.js'), /startUpdates/); assert.match(read('js/update.js'), /register\('\.\/sw\.js', \{ updateViaCache: 'none' \}\)/);
 });
 
 test('the deploy workflow stamps the version into the worker and the app', () => {

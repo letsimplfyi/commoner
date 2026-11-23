@@ -31,8 +31,6 @@ self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
   if (event.request.method !== 'GET' || url.origin !== self.location.origin) return; // Commons stays on the network
   if (event.request.mode === 'navigate') {
-    // Short links: /c/Name -> /?c=Name (the relative asset paths only work from the root).
-    if (url.pathname.startsWith('/c/')) { event.respondWith(Response.redirect(new URL(`/?${new URLSearchParams({ c: decodeURIComponent(url.pathname.slice(3)) })}`, self.location.origin).href, 302)); return; }
     // Cache "./" (not index.html): Pages redirects /index.html -> /, and a cached redirect cannot answer a navigation.
     event.respondWith(caches.open(CACHE).then(cache => cache.match('./')).then(cached => cached || fetch(event.request)));
     return;

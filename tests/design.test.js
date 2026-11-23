@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, existsSync, readdirSync } from 'node:fs';
 const read = path => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
-const ALLOWED_HOSTS = new Set(['commons.wikimedia.org', 'upload.wikimedia.org', 'commoner.letsimpl.fyi', 'letsimpl.fyi', 'github.com', 'brand.letsimpl.fyi', 'www.w3.org', 'example.org']);
+const ALLOWED_HOSTS = new Set(['commons.wikimedia.org', 'upload.wikimedia.org', 'thumb.wikimedia.org', 'commoner.letsimpl.fyi', 'letsimpl.fyi', 'github.com', 'brand.letsimpl.fyi', 'www.w3.org', 'example.org']);
 
 test('branding is the vendored letsimpl.fyi brand, loaded before the app styles', () => {
   const meta = JSON.parse(read('brand/brand.json'));
@@ -29,7 +29,7 @@ test('no inline scripts, styles or event handlers; no service worker; CSP allows
   assert.ok(!/serviceWorker/.test(readdirSync(new URL('../js/', import.meta.url)).map(f => read(`js/${f}`)).join('')));
   const csp = read('_headers').match(/Content-Security-Policy: (.*)/)[1];
   assert.match(csp, /default-src 'self'/); assert.match(csp, /script-src 'self'(;|$)/); assert.match(csp, /style-src 'self'(;|$)/);
-  assert.match(csp, /connect-src 'self' https:\/\/commons\.wikimedia\.org(;|$)/); assert.match(csp, /img-src 'self' data: https:\/\/upload\.wikimedia\.org(;|$)/);
+  assert.match(csp, /connect-src 'self' https:\/\/commons\.wikimedia\.org(;|$)/); assert.match(csp, /img-src 'self' data: https:\/\/upload\.wikimedia\.org https:\/\/thumb\.wikimedia\.org(;|$)/);
   assert.ok(!/unsafe-/.test(csp));
 });
 

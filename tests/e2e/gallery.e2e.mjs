@@ -9,10 +9,11 @@ import { listResponse } from '../fixtures.js';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
+const CSP = (await readFile(join(root, '_headers'), 'utf8')).match(/Content-Security-Policy: (.*)/)[1]; // the real production policy
 const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.woff2': 'font/woff2' };
 const server = http.createServer(async (req, res) => {
   const path = new URL(req.url, 'http://x').pathname;
-  try { const body = await readFile(join(root, normalize(path === '/' ? '/index.html' : path))); res.writeHead(200, { 'content-type': types[extname(path)] || 'text/html' }); res.end(body); }
+  try { const body = await readFile(join(root, normalize(path === '/' ? '/index.html' : path))); res.writeHead(200, { 'content-type': types[extname(path)] || 'text/html', 'content-security-policy': CSP }); res.end(body); }
   catch { res.writeHead(404); res.end(); }
 });
 await new Promise(done => server.listen(0, '127.0.0.1', done));
@@ -30,7 +31,7 @@ async function open(path = '/', { viewport = { width: 390, height: 780 }, common
   await page.route('**/*', route => {
     const url = new URL(route.request().url());
     if (url.origin === base) return route.continue();
-    if (url.origin === 'https://upload.wikimedia.org') return route.fulfill({ contentType: 'image/svg+xml', body: IMG });
+    if (url.origin === 'https://upload.wikimedia.org' || url.origin === 'https://thumb.wikimedia.org') return route.fulfill({ contentType: 'image/svg+xml', body: IMG });
     if (url.origin === 'https://commons.wikimedia.org' && url.pathname === '/w/api.php') {
       const p = url.searchParams;
       if (commons) return commons(route, p);
@@ -44,12 +45,14 @@ async function open(path = '/', { viewport = { width: 390, height: 780 }, common
     }
     outside.push(url.href); return route.abort();
   });
+  const violations = [];
+  page.on('console', m => { if (/Content Security Policy/i.test(m.text())) violations.push(m.text()); });
   await page.goto(base + path);
-  return { page, context, outside };
+  return { page, context, outside, violations };
 }
 
 test('home: a pasted Commons link opens the gallery, recents are kept, nothing leaves except Commons', async () => {
-  const { page, context, outside } = await open();
+  const { page, context, outside, violations } = await open();
   await page.getByLabel('Category name or link').fill('https://commons.wikimedia.org/wiki/Category:Test_cat');
   await page.getByRole('button', { name: 'Open', exact: true }).click();
   await page.locator('.tile').first().waitFor();
@@ -62,6 +65,7 @@ test('home: a pasted Commons link opens the gallery, recents are kept, nothing l
   await page.getByRole('link', { name: 'Open another category' }).click();
   await page.getByRole('link', { name: 'Test cat' }).waitFor();
   assert.deepEqual(outside, []);
+  assert.deepEqual(violations, [], 'the production CSP blocked something');
   await context.close();
 });
 
@@ -89,6 +93,7 @@ test('viewer: tap opens it, arrows and sideways scroll move, Escape and Back clo
   assert.equal(await page.locator('.slide img').count() > 0, true);
   await page.getByRole('button', { name: 'Details' }).click();
   await page.getByText('CC BY-SA 4.0').first().waitFor();
+  await page.waitForFunction(() => [...document.querySelectorAll('dialog.viewer .slide img')].some(i => i.complete && i.naturalWidth > 0)); // the 1280px image loads under the CSP
   await page.keyboard.press('Escape');
   await dialog.waitFor({ state: 'detached' });
   assert.doesNotMatch(page.url(), /&f=/);

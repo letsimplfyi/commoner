@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://commoner.letsimpl.fyi/sitemap.xml

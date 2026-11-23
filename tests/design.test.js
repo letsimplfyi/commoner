@@ -31,6 +31,11 @@ test('no inline scripts, styles or event handlers; CSP allows only Commons', () 
   assert.ok(!/unsafe-/.test(csp));
 });
 
+test('the page ships no placeholder text that the app would leave behind', () => {
+  assert.match(read('index.html'), /<div id="app"><\/div>/);
+  assert.match(read('js/main.js'), /replaceChildren\(\)/);
+});
+
 test('the only hosts the app talks to are Commons and its own links', () => {
   const sources = ['index.html', 'styles.css', 'manifest.json', ...readdirSync(new URL('../js/', import.meta.url)).map(f => `js/${f}`)];
   for (const file of sources) for (const [, host] of read(file).matchAll(/https?:\/\/([a-z0-9.-]+)/gi)) assert.ok(ALLOWED_HOSTS.has(host), `${file} mentions ${host}`);

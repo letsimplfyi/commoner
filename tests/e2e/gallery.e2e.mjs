@@ -81,6 +81,8 @@ test('home: a pasted Commons link opens the gallery, recents are kept, nothing l
   await page.waitForFunction(() => document.querySelectorAll('.tile').length === 5); // the next page loads on its own near the end
   await back(page).click();
   await page.getByRole('link', { name: 'Test cat' }).waitFor();
+  assert.equal(await page.locator('.boot').count(), 0, 'no leftover loading text');
+  assert.equal(await page.locator('#app').evaluate(el => [...el.childNodes].filter(n => n.nodeType === 3 && n.textContent.trim()).length), 0, 'no stray text in the app container');
   assert.deepEqual(outside, []);
   assert.deepEqual(violations, [], 'the production CSP blocked something');
   await context.close();

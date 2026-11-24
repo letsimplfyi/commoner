@@ -7,6 +7,7 @@ const SHELL = [
   './', './styles.css', './manifest.json',
   './js/config.js', './js/commons.js', './js/popular.js', './js/icons.js', './js/ui.js', './js/main.js', './js/theme.js', './js/update.js',
   './js/typeahead.js', './js/feed.js', './js/support.js', './js/upi.js', './js/qr.js',
+  './js/exif.js', './js/rules.js', './js/measure.js', './js/upload.js', './js/wikitext.js', './js/auth.js',
   './brand/tokens/tokens.css', './brand/css/base.css', './brand/css/components.css',
   './brand/fonts/atkinson-hyperlegible-mono-latin.woff2', './brand/fonts/atkinson-hyperlegible-next-latin-wght-normal.woff2',
   './brand/fonts/courier-prime-400-latin.woff2', './brand/fonts/courier-prime-700-latin.woff2', './brand/fonts/noto-serif-malayalam.woff2',

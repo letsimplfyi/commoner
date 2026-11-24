@@ -10,3 +10,6 @@ export const GRID_WIDTH = 500;
 export const VIEW_WIDTH = 1280;
 export const FETCH_TIMEOUT_MS = 15000;
 export const RECENT_KEEP = 10;
+// OAuth 2.0 (public client, PKCE): the key is not a secret. The callback must match the registered one exactly.
+export const OAUTH_CLIENT_ID = '12ff63aa5c63f338d304cc12d74abc30';
+export const OAUTH_BASE = 'https://commons.wikimedia.org/w/rest.php/oauth2';

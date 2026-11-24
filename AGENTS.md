@@ -47,9 +47,15 @@ under https://github.com/letsimplfyi. Read `../brand/AGENTS.md` for the brand's 
   default. Optional things are folded away; obvious actions (copy link, share, back) are icon buttons with `aria-label`.
 - **Neuro-atypical first.** Low sensory load, predictable layout, short lines, one idea per screen. Honour
   `prefers-reduced-motion` and `prefers-color-scheme`.
-- **Privacy.** Commons requests are anonymous: `credentials: 'omit'`, `referrerPolicy: 'no-referrer'`, no API key. Only
-  these things are stored, on the device: theme, the last 10 galleries, the donation preference, the cached Picture of the
-  day, and the service worker's app cache. Nothing is sent anywhere.
+- **Privacy.** Commons requests never send cookies: `credentials: 'omit'`, `referrerPolicy: 'no-referrer'`. Browsing is
+  anonymous, with no API key. Only these things are stored, on the device: theme, the last 10 galleries, the donation
+  preference, the cached Picture of the day, the service worker's app cache, and, only for a user who signs in to upload,
+  the OAuth token (`commoner-auth`), their upload settings (`commoner-profile`: licence, location precision) and whether the
+  sign-in offer was answered (`commoner-onboarded`). While upload is unfinished, `commoner-upload` records that `?u=1` was
+  visited, which is what shows its entry points (remove it with the feature flag when upload ships). The token
+  is sent only to Commons' own API, as a bearer header. The photos a user picks stay in memory and are never sent until
+  they approve an upload. The OAuth client key (`js/config.js`) is public by design; the app has no client secret and
+  never may (a secret registered for it, in `nix-config` sops, is unused and must stay out of this repo).
 - **Open data.** Photos keep their own licences, shown in the viewer. Commoner is **not affiliated with or endorsed by the
   Wikimedia Foundation**: never use Wikimedia/Commons logos or imitate their marks (their identity guidelines forbid it).
 
@@ -73,6 +79,12 @@ js/
   upi.js             UPI link building (pure)
   qr.js              draws a QR code on a canvas; loads vendor/qrcode.js on demand
   update.js          registers the service worker; the safe-restart logic
+  exif.js            reads type, size, camera, date and GPS from a photo's first bytes (pure)
+  rules.js           the rules: which photos are staged and why the rest are not; quotes copied from Commons (pure)
+  measure.js         decodes one photo in the browser: real size, darkness, sharpness, faces where supported
+  upload.js          the upload screen (`?u=1`): pick, check on the device, Ready and Not selected
+  wikitext.js        the file name, page text, licence and GPS privacy for one photo (pure)
+  auth.js            Commons sign-in: OAuth 2.0 with PKCE, token on the device, authenticated API calls
   icons.js           inline SVG line icons (24 grid, square caps)
   config.js          constants: APP_VERSION, hosts, page size, thumbnail widths
   theme.js           sets data-theme before first paint

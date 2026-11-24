@@ -99,6 +99,15 @@ export function listUrl(q, { sort, cont = null } = {}) {
 export function suggestUrl(query, limit = 8) {
   return api({ list: 'prefixsearch', pssearch: query, psnamespace: '14', pslimit: String(limit) });
 }
+// Commons categories that carry coordinates, nearest first. Hidden (maintenance) and empty ones are dropped.
+export const nearbyUrl = ({ lat, lon }, { radius = 1000, limit = 15 } = {}) =>
+  api({ generator: 'geosearch', ggscoord: `${lat}|${lon}`, ggsradius: String(radius), ggsnamespace: '14', ggslimit: String(limit), prop: 'categoryinfo' });
+export function normaliseNearby(json, max = 6) {
+  return (json?.query?.pages || [])
+    .filter(p => p.categoryinfo && !p.categoryinfo.hidden && (p.categoryinfo.files || 0) + (p.categoryinfo.subcats || 0) > 0)
+    .sort((a, b) => (a.index ?? 0) - (b.index ?? 0))
+    .map(p => p.title.replace(/^Category:/, '')).slice(0, max);
+}
 export const normaliseSuggestions = json => (json?.query?.prefixsearch || []).map(p => p.title.replace(/^Category:/, ''));
 
 // Wikimedia refuses thumbnails larger than the original.
@@ -176,4 +185,5 @@ export async function fetchInfo(q, options) {
   return { exists: missing.length === 0, files: count?.query?.searchinfo?.totalhits ?? 0, subcats: [], parents: [], missing };
 }
 export const fetchFiles = (q, { sort, cont, ...options } = {}) => getJson(listUrl(q, { sort, cont }), options).then(normaliseFiles);
+export const fetchNearby = (gps, options) => getJson(nearbyUrl(gps), options).then(json => normaliseNearby(json));
 export const fetchSuggestions = (query, options) => getJson(suggestUrl(query), options).then(normaliseSuggestions);

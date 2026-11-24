@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   parseCategory, parseInput, parseRoute, makeQuery, queryKey, queryTitle, usesSearch, searchTerm, pageUrl, shareUrl, listUrl, infoUrl, existsUrl, countUrl,
-  suggestUrl, normaliseSuggestions, gridSrc, viewSrc, resize, plain, displayTitle, normaliseFiles, normaliseInfo, normaliseExists, getJson, fetchInfo, CommonsError,
+  suggestUrl, normaliseSuggestions, gridSrc, viewSrc, resize, plain, displayTitle, normaliseFiles, normaliseInfo, normaliseExists, getJson, fetchInfo, CommonsError, nearbyUrl, normaliseNearby,
 } from '../js/commons.js';
 import { POPULAR, allPopular, entryName, entryDeep, randomEntry } from '../js/popular.js';
 import { page, listResponse } from './fixtures.js';
@@ -129,4 +129,15 @@ test('the popular list is unique, valid and safe to show first', () => {
   assert.ok(names.includes(entryName(randomEntry(() => 0))) && names.includes(entryName(randomEntry(() => 0.999))));
   assert.equal(entryDeep('Plain'), false); assert.equal(entryDeep({ name: 'Broad', deep: true }), true);
   for (const unsafe of ['Paintings', 'Sculptures', 'Tattoos', 'Featured pictures of people']) assert.ok(!names.includes(unsafe), `${unsafe} must not be a start-here category`);
+});
+
+test('nearby categories: a geosearch for categories, nearest first, without hidden or empty ones', () => {
+  const url = new URL(nearbyUrl({ lat: 48.8584, lon: 2.2945 }));
+  assert.equal(url.searchParams.get('generator'), 'geosearch'); assert.equal(url.searchParams.get('ggscoord'), '48.8584|2.2945'); assert.equal(url.searchParams.get('ggsnamespace'), '14');
+  assert.equal(url.searchParams.get('origin'), '*');
+  const page = (title, index, categoryinfo) => ({ title: `Category:${title}`, index, ...(categoryinfo ? { categoryinfo } : {}) });
+  const json = { query: { pages: [page('Far', 3, { files: 9, subcats: 0 }), page('Near', 1, { files: 2, subcats: 1 }), page('Hidden', 2, { files: 5, hidden: true }), page('Empty', 4, { files: 0, subcats: 0 }), page('No info', 5)] } };
+  assert.deepEqual(normaliseNearby(json), ['Near', 'Far']);
+  assert.deepEqual(normaliseNearby({}), []);
+  assert.equal(normaliseNearby({ query: { pages: Array.from({ length: 9 }, (_, i) => page(`C${i}`, i, { files: 1 })) } }).length, 6);
 });

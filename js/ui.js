@@ -9,6 +9,8 @@ import { pictureOfTheDay } from './feed.js';
 import { SUPPORT, PRESETS, parseAmount, formatRupees, supportLinks, shouldAsk, afterAsk, countGallery, cleanSupport } from './support.js';
 import { drawQR } from './qr.js';
 import { updateState, checkForUpdate, apply, justUpdated } from './update.js';
+import { Upload } from './upload.js';
+import { finishLogin, loginUrl, session } from './auth.js';
 const html = htm.bind(h);
 
 const MAX_DEEP_LINK_PAGES = 5, GRID_W = 250;
@@ -17,10 +19,14 @@ const store = key => ({
   read: () => { try { return JSON.parse(localStorage.getItem(key)); } catch { return null; } },
   write: value => { try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* storage blocked */ } },
 });
-const recentStore = store('commoner-recent'), supportStore = store('commoner-support');
+const recentStore = store('commoner-recent'), supportStore = store('commoner-support'), onboardStore = store('commoner-onboarded'), flagStore = store('commoner-upload');
 const searchOf = q => new URL(shareUrl(location.href, q)).search;
 const readRecent = () => (recentStore.read() || []).filter(s => typeof s === 'string').map(s => (s.startsWith('?') ? s : searchOf({ cats: [s] }))).slice(0, RECENT_KEEP);
 const readRoute = () => parseRoute(location.search);
+// Upload is not finished: visiting ?u=1 once switches its entry points on for this browser. Remove with the flag when it ships.
+const uploadOn = () => { if (new URLSearchParams(location.search).has('u') || authReturn()) flagStore.write(1); return flagStore.read() === 1; };
+const authReturn = () => /[?&](code|error)=/.test(location.search); // Commons sends the user back with ?code= or ?error=
+const readUpload = () => new URLSearchParams(location.search).has('u') || authReturn(); // upload is reached by ?u=1 only, until sign-in exists
 const NOT_A_CATEGORY = 'Not a Commons category.';
 
 function Notice({ kind = 'info', icon = 'info', children }) {
@@ -30,13 +36,18 @@ function Notice({ kind = 'info', icon = 'info', children }) {
 export class App extends Component {
   state = { q: null, f: '', info: null, files: [], next: null, status: 'idle', error: null, viewer: null, toast: '', recent: readRecent(),
     theme: document.documentElement.dataset.theme || 'light', skipped: 0, similar: [], potd: null, support: cleanSupport(supportStore.read()),
-    supportOpen: false, filterOpen: false, refineMode: 'include', inputError: '', refineError: '', checking: false };
+    supportOpen: false, filterOpen: false, refineMode: 'include', inputError: '', refineError: '', checking: false, upload: readUpload(), authError: '', uploadOn: uploadOn(), welcomed: !!onboardStore.read() };
   abort = null; pages = 0; toastTimer = 0; io = null; similarFor = '';
 
   componentDidMount() {
     addEventListener('popstate', this.onPop);
     addEventListener('commoner-update', this.refresh);
     if (justUpdated()) this.toast(`Updated to ${APP_VERSION}`);
+    if (authReturn()) {
+      const back = () => history.replaceState({}, '', `${location.pathname}?u=1`);
+      finishLogin().then(() => { back(); this.setState({ upload: true, authError: '' }); }).catch(error => { back(); this.setState({ upload: true, authError: error.message }); });
+      return;
+    }
     const route = readRoute();
     if (route.cats.length) this.load(route, route.f, { push: false });
     pictureOfTheDay().then(potd => this.setState({ potd })).catch(() => { /* the card simply stays away */ });
@@ -45,6 +56,8 @@ export class App extends Component {
   refresh = () => this.forceUpdate();
 
   onPop = () => {
+    if (readUpload()) return this.setState({ upload: true });
+    this.setState({ upload: false });
     const route = readRoute();
     if (!route.cats.length) return this.reset();
     if (!this.state.q || queryKey(route) !== queryKey(this.state.q)) return this.load(route, route.f, { push: false });
@@ -54,8 +67,12 @@ export class App extends Component {
   reset() {
     this.abort?.abort();
     document.title = 'Commoner · Explore the commons.';
-    this.setState({ q: null, f: '', info: null, files: [], next: null, status: 'idle', error: null, viewer: null });
+    this.setState({ q: null, f: '', info: null, files: [], next: null, status: 'idle', error: null, viewer: null, upload: false });
   }
+  // ---- upload entry: sign in from anywhere (it returns to the upload screen), or open the upload screen once signed in
+  signIn = async () => { onboardStore.write(1); this.setState({ welcomed: true }); try { location.href = await loginUrl('?u=1'); } catch { this.toast('Could not start sign-in'); } };
+  skipWelcome = () => { onboardStore.write(1); this.setState({ welcomed: true }); };
+  goUpload = () => { history.pushState({}, '', `${location.pathname}?u=1`); this.setState({ upload: true }); };
   goHome = event => {
     event?.preventDefault();
     if (location.search) history.pushState({}, '', location.pathname);
@@ -281,16 +298,21 @@ export class App extends Component {
   }
 
   render() {
-    const { q, files, viewer, toast, theme, supportOpen, support } = this.state;
+    const { q, files, viewer, toast, theme, supportOpen, support, upload } = this.state;
     return html`<a class="ls-skip" href="#main">Skip to content</a>
       <header class="app-header"><div class="header-inner">
         <a class="brand" href="./" onClick=${this.goHome} aria-label="Commoner, home">
           <img class="mark mark--light" src="./icons/logo-mark.svg" alt="" width="40" height="40" />
           <img class="mark mark--dark" src="./icons/logo-mark-inverse.svg" alt="" width="40" height="40" />
           <span>Commoner</span></a>
-        <button class="ls-btn ls-btn--small theme" type="button" onClick=${this.toggleTheme} aria-label=${theme === 'dark' ? 'Light theme' : 'Dark theme'}><${Icon} name=${theme === 'dark' ? 'sun' : 'moon'} small /></button>
+        <div class="header-actions">
+          ${this.state.uploadOn && (session()
+            ? html`<button class="ls-btn ls-btn--small" type="button" onClick=${this.goUpload}><${Icon} name="upload" small /> Upload</button>`
+            : html`<button class="ls-btn ls-btn--small" type="button" onClick=${this.signIn}>Sign in</button>`)}
+          <button class="ls-btn ls-btn--small theme" type="button" onClick=${this.toggleTheme} aria-label=${theme === 'dark' ? 'Light theme' : 'Dark theme'}><${Icon} name=${theme === 'dark' ? 'sun' : 'moon'} small /></button>
+        </div>
       </div></header>
-      <main id="main" class="page">${q ? this.renderGallery() : this.renderHome()}</main>
+      <main id="main" class="page">${upload ? html`<${Upload} onBack=${this.goHome} onAuth=${this.refresh} authError=${this.state.authError} />` : q ? this.renderGallery() : this.renderHome()}</main>
       <footer class="page foot">
         <p>Unofficial. Photos come from Wikimedia Commons, open to everyone, each with its own licence.</p>
         <p><a href=${REPO_URL} target="_blank" rel="noopener noreferrer">Source</a> · <button class="quiet" type="button" onClick=${this.openSupport}>Support</button> · ${updateState.ready
@@ -298,8 +320,24 @@ export class App extends Component {
           : html`<button class="quiet" type="button" disabled=${this.state.checking} onClick=${this.checkUpdates} aria-label=${`Version ${APP_VERSION}, check for updates`}>${APP_VERSION}</button>`}</p>
       </footer>
       ${viewer !== null && files[viewer] && html`<${Viewer} files=${files} index=${viewer} onIndex=${this.setViewerIndex} onClose=${this.closeViewer} onShare=${this.share} query=${q} />`}
+      ${this.state.uploadOn && !this.state.welcomed && !session() && !upload && !q && !supportOpen && html`<${Welcome} onSignIn=${this.signIn} onSkip=${this.skipWelcome} />`}
       ${supportOpen && html`<${Support} ask=${shouldAsk(support)} onClose=${this.closeSupport} onCopied=${() => this.toast('Copied')} />`}
       <div class="toast-wrap" role="status">${toast && html`<span class="ls-toast">${toast}</span>`}</div>`;
+  }
+}
+
+// ---- first visit: offer to sign in; skipping keeps the app read-only, and signing in is always one tap away in the header
+class Welcome extends Component {
+  dialog = null;
+  componentDidMount() { this.dialog.addEventListener('close', this.props.onSkip); this.dialog.showModal(); }
+  componentWillUnmount() { this.dialog.removeEventListener('close', this.props.onSkip); if (this.dialog.open) this.dialog.close(); }
+  render({ onSignIn }) {
+    return html`<dialog class="ls-sheet" ref=${el => { this.dialog = el; }} aria-labelledby="welcome-title">
+      <div class="ls-sheet__head"><h2 id="welcome-title">Sign in to upload</h2>
+        <button class="ls-btn" type="button" onClick=${() => this.dialog.close()} aria-label="Close"><${Icon} name="close" /></button></div>
+      <div class="actions"><button class="ls-btn ls-btn--primary" type="button" onClick=${onSignIn}>Sign in</button>
+        <button class="ls-btn" type="button" onClick=${() => this.dialog.close()}>Skip</button></div>
+    </dialog>`;
   }
 }
 

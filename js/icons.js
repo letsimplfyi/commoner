@@ -16,6 +16,7 @@ const paths = {
   link: 'M9 15l6-6M8 7l3-3a5 5 0 0 1 7 7l-3 3M16 17l-3 3a5 5 0 0 1-7-7l3-3',
   filter: 'M4 6h16M4 12h16M4 18h16M8 3v6M16 9v6M10 15v6',
   download: 'M12 3v12M7 10l5 5 5-5M4 21h16',
+  upload: 'M12 15V3M7 8l5-5 5 5M4 21h16',
 };
 
 export function Icon({ name, small }) {

@@ -28,7 +28,7 @@ that repeat the label, icons where the meaning is obvious (copy link, share, bac
 | Subcategories | Off for one plain category (fast, Commons order); on by default as soon as there is a second category or a leave-out |
 | Predictions | Commons prefix search, 250 ms debounce, arrow keys, Enter, Escape; a combobox for assistive tech |
 | Start list | Hand-picked, community-curated or plainly broad; checked by `npm run popular:check`. Nothing likely to surface nudity |
-| Picture of the day | Wikimedia Feed API, one request a day, kept on the device |
+| Picture of the day | Wikimedia Feed API, one request a day, kept on the device; the card opens that photo in the viewer (`?f=`), not the archive |
 | Non-photos | Video, audio and documents are skipped and counted |
 | Storage | Theme, the last 10 galleries, the support preference: on the device only |
 | Updates | Service worker with per-deploy cache busting and safe restarts (see README) |

@@ -93,8 +93,13 @@ export function listUrl(q, { sort, cont = null } = {}) {
   if (usesSearch(x)) {
     return api({ generator: 'search', gsrsearch: searchTerm(x), gsrnamespace: '6', gsrlimit: String(PAGE_SIZE), gsrsort: newest ? 'create_timestamp_desc' : 'relevance', ...IMAGE_INFO, ...(cont || {}) });
   }
-  return api({ generator: 'categorymembers', gcmtitle: categoryTitle(x.cats[0]), gcmtype: 'file', gcmlimit: String(PAGE_SIZE), gcmsort: newest ? 'timestamp' : 'sortkey', gcmdir: newest ? 'desc' : 'asc', ...IMAGE_INFO, ...(cont || {}) });
+  return api({ list: 'categorymembers', cmtitle: categoryTitle(x.cats[0]), cmtype: 'file', cmlimit: String(PAGE_SIZE), cmprop: 'ids|title', cmsort: newest ? 'timestamp' : 'sortkey', cmdir: newest ? 'desc' : 'asc', ...(cont || {}) });
 }
+
+// A category listing does not say in which order its pages come back (only searches carry an "index"), so a plain category
+// is fetched in two steps: the ordered member list, then the photo details for exactly those ids, put back in list order.
+export const filesByIdUrl = ids => api({ pageids: ids.join('|'), ...IMAGE_INFO });
+export const fileUrl = name => api({ titles: `File:${name}`, ...IMAGE_INFO });
 
 export function suggestUrl(query, limit = 8) {
   return api({ list: 'prefixsearch', pssearch: query, psnamespace: '14', pslimit: String(limit) });
@@ -175,5 +180,19 @@ export async function fetchInfo(q, options) {
   const missing = normaliseExists(exists, names);
   return { exists: missing.length === 0, files: count?.query?.searchinfo?.totalhits ?? 0, subcats: [], parents: [], missing };
 }
-export const fetchFiles = (q, { sort, cont, ...options } = {}) => getJson(listUrl(q, { sort, cont }), options).then(normaliseFiles);
+export async function fetchFiles(q, { sort, cont, ...options } = {}) {
+  const url = listUrl(q, { sort, cont });
+  if (usesSearch(q)) return normaliseFiles(await getJson(url, options));
+  const members = await getJson(url, options);
+  const ids = (members.query?.categorymembers || []).map(m => m.pageid), next = members.continue || null;
+  if (!ids.length) return { files: [], next, skipped: 0 };
+  const info = await getJson(filesByIdUrl(ids), options), place = new Map(ids.map((id, i) => [id, i + 1]));
+  return normaliseFiles({ query: { pages: (info.query?.pages || []).map(p => ({ ...p, index: place.get(p.pageid) })) }, continue: next });
+}
+// One photo by name (a Picture of the day link, or a shared ?f= address).
+export async function fetchFile(name, options) {
+  const { files } = normaliseFiles(await getJson(fileUrl(name), options));
+  if (!files.length) throw new CommonsError('http', 'That photo is not on Commons.');
+  return files[0];
+}
 export const fetchSuggestions = (query, options) => getJson(suggestUrl(query), options).then(normaliseSuggestions);

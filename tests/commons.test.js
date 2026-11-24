@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   parseCategory, parseInput, parseRoute, makeQuery, queryKey, queryTitle, usesSearch, searchTerm, pageUrl, shareUrl, listUrl, infoUrl, existsUrl, countUrl,
-  suggestUrl, normaliseSuggestions, gridSrc, viewSrc, resize, plain, displayTitle, normaliseFiles, normaliseInfo, normaliseExists, getJson, fetchInfo, CommonsError,
+  suggestUrl, filesByIdUrl, fileUrl, fetchFiles, fetchFile, normaliseSuggestions, gridSrc, viewSrc, resize, plain, displayTitle, normaliseFiles, normaliseInfo, normaliseExists, getJson, fetchInfo, CommonsError,
 } from '../js/commons.js';
 import { POPULAR, allPopular, entryName, entryDeep, randomEntry } from '../js/popular.js';
 import { page, listResponse } from './fixtures.js';
@@ -53,10 +53,12 @@ test('the home box accepts a name, a Commons link or a shared Commoner link with
 });
 
 test('one plain category lists its members; anything else becomes a Commons search with AND and NOT', () => {
-  const plainUrl = new URL(listUrl('Foo bar', { sort: 'newest', cont: { gcmcontinue: 'file|XYZ|1', continue: 'gcmcontinue||' } })).searchParams;
-  assert.equal(plainUrl.get('generator'), 'categorymembers'); assert.equal(plainUrl.get('gcmtitle'), 'Category:Foo bar'); assert.equal(plainUrl.get('gcmsort'), 'timestamp');
-  assert.equal(plainUrl.get('gcmdir'), 'desc'); assert.equal(plainUrl.get('gcmcontinue'), 'file|XYZ|1'); assert.equal(plainUrl.get('origin'), '*'); assert.equal(plainUrl.get('gcmlimit'), '50');
-  assert.equal(new URL(listUrl('Foo')).searchParams.get('gcmsort'), 'sortkey');
+  const plainUrl = new URL(listUrl('Foo bar', { sort: 'newest', cont: { cmcontinue: 'file|XYZ|1', continue: '-||' } })).searchParams;
+  assert.equal(plainUrl.get('list'), 'categorymembers'); assert.equal(plainUrl.get('cmtitle'), 'Category:Foo bar'); assert.equal(plainUrl.get('cmsort'), 'timestamp');
+  assert.equal(plainUrl.get('cmdir'), 'desc'); assert.equal(plainUrl.get('cmcontinue'), 'file|XYZ|1'); assert.equal(plainUrl.get('origin'), '*'); assert.equal(plainUrl.get('cmlimit'), '50');
+  assert.equal(plainUrl.get('generator'), null, 'a generator gives no order for category members, so it is not used');
+  const byName = new URL(listUrl('Foo')).searchParams;
+  assert.equal(byName.get('cmsort'), 'sortkey'); assert.equal(byName.get('cmdir'), 'asc');
   const q = { cats: ['Nepal', 'Sunsets'], not: ['Kathmandu'], sort: 'newest' };
   assert.equal(searchTerm(q), 'deepcategory:"Nepal" deepcategory:"Sunsets" -deepcategory:"Kathmandu"');
   assert.equal(searchTerm({ cats: ['A', 'B'], deep: false }), 'incategory:"A" incategory:"B"');
@@ -129,4 +131,42 @@ test('the popular list is unique, valid and safe to show first', () => {
   assert.ok(names.includes(entryName(randomEntry(() => 0))) && names.includes(entryName(randomEntry(() => 0.999))));
   assert.equal(entryDeep('Plain'), false); assert.equal(entryDeep({ name: 'Broad', deep: true }), true);
   for (const unsafe of ['Paintings', 'Sculptures', 'Tattoos', 'Featured pictures of people']) assert.ok(!names.includes(unsafe), `${unsafe} must not be a start-here category`);
+});
+
+// ---- order: a category listing's pages carry no "index", so the order comes from the member list
+const fakeFetch = routes => async url => { const p = new URL(url).searchParams; const body = routes(p); return { ok: true, json: async () => body }; };
+const member = (id, name) => ({ pageid: id, ns: 6, title: `File:${name}` });
+const detail = (id, name) => ({ pageid: id, ns: 6, title: `File:${name}`, imageinfo: [{ url: 'https://upload.wikimedia.org/x', thumburl: 'https://thumb.wikimedia.org/x', width: 4000, height: 3000, mime: 'image/jpeg', extmetadata: {} }] });
+test('a plain category keeps the order of its member list, however the photo details come back', async () => {
+  const members = [member(30, 'Newest.jpg'), member(10, 'Middle.jpg'), member(20, 'Oldest.jpg')], calls = [];
+  const fetchImpl = fakeFetch(p => {
+    calls.push(Object.fromEntries(p));
+    if (p.get('list') === 'categorymembers') return { continue: { cmcontinue: 'file|NEXT|1', continue: '-||' }, query: { categorymembers: members } };
+    return { query: { pages: [detail(20, 'Oldest.jpg'), detail(30, 'Newest.jpg'), detail(10, 'Middle.jpg')] } }; // scrambled on purpose
+  });
+  const page = await fetchFiles('Pictures', { sort: 'newest', fetchImpl });
+  assert.deepEqual(page.files.map(f => f.name), ['Newest.jpg', 'Middle.jpg', 'Oldest.jpg']);
+  assert.deepEqual(page.next, { cmcontinue: 'file|NEXT|1', continue: '-||' });
+  assert.equal(calls[0].cmsort, 'timestamp'); assert.equal(calls[1].pageids, '30|10|20');
+  assert.equal(page.skipped, 0);
+});
+test('a category listing continues with the cmcontinue it was given, and an empty category makes no second request', async () => {
+  const calls = [];
+  const empty = await fetchFiles('Nothing', { fetchImpl: fakeFetch(p => { calls.push(p.get('list') || p.get('pageids')); return { query: { categorymembers: [] } }; }) });
+  assert.deepEqual(empty, { files: [], next: null, skipped: 0 }); assert.deepEqual(calls, ['categorymembers']);
+  let sent;
+  await fetchFiles('Pictures', { cont: { cmcontinue: 'file|AAA|9', continue: '-||' }, fetchImpl: fakeFetch(p => { sent ??= Object.fromEntries(p); return { query: { categorymembers: [] } }; }) });
+  assert.equal(sent.cmcontinue, 'file|AAA|9');
+});
+test('searches still order by the index Commons gives them', async () => {
+  const pages = [{ ...detail(1, 'Third.jpg'), index: 3 }, { ...detail(2, 'First.jpg'), index: 1 }, { ...detail(3, 'Second.jpg'), index: 2 }];
+  const page = await fetchFiles({ cats: ['A', 'B'] }, { fetchImpl: fakeFetch(() => ({ query: { pages } })) });
+  assert.deepEqual(page.files.map(f => f.name), ['First.jpg', 'Second.jpg', 'Third.jpg']);
+});
+test('one photo by name: its own details, or a clear error when it is not on Commons', async () => {
+  assert.equal(new URL(fileUrl('A b.jpg')).searchParams.get('titles'), 'File:A b.jpg');
+  assert.equal(new URL(filesByIdUrl([1, 2])).searchParams.get('pageids'), '1|2');
+  const file = await fetchFile('A b.jpg', { fetchImpl: fakeFetch(() => ({ query: { pages: [detail(5, 'A b.jpg')] } })) });
+  assert.equal(file.name, 'A b.jpg');
+  await assert.rejects(fetchFile('Nope.jpg', { fetchImpl: fakeFetch(() => ({ query: { pages: [{ title: 'File:Nope.jpg', missing: true }] } })) }), /not on Commons/);
 });

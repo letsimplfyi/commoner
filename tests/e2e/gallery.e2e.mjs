@@ -6,7 +6,7 @@ import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { listResponse } from '../fixtures.js';
+import { listResponse, page as filePage } from '../fixtures.js';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
@@ -50,6 +50,17 @@ async function open(path = '/', { viewport = { width: 390, height: 780 }, common
         return route.fulfill({ json: { query: { prefixsearch: q.startsWith('sw') ? [{ title: 'Category:Swayambhunath' }, { title: 'Category:Swayambhu Ganpati Temple' }] : [] } } });
       }
       if (p.get('list') === 'search') return route.fulfill({ json: { query: { searchinfo: { totalhits: 5 }, search: [] } } });
+      if (p.get('list') === 'categorymembers' && p.get('cmtype') === 'file') { // a plain category: the ordered member list (name order, or newest first)
+        if (MISSING.concat(['Category:Empty']).includes(p.get('cmtitle'))) return route.fulfill({ json: { batchcomplete: true, query: { categorymembers: [] } } });
+        const ordered = p.get('cmsort') === 'timestamp' ? [...NAMES].reverse() : NAMES, more = p.has('cmcontinue');
+        const names = more ? ordered.slice(3) : ordered.slice(0, 3);
+        return route.fulfill({ json: { batchcomplete: true, ...(more ? {} : { continue: { cmcontinue: 'file|X|1', continue: '-||' } }), query: { categorymembers: names.map(n => ({ pageid: 1001 + NAMES.indexOf(n), ns: 6, title: `File:${n}` })) } } });
+      }
+      if (p.has('pageids')) { // the photo details for those ids, returned in the opposite order on purpose
+        const names = p.get('pageids').split('|').map(id => NAMES[Number(id) - 1001]);
+        return route.fulfill({ json: { query: { pages: names.map(n => filePage(NAMES.indexOf(n) + 1, n)).reverse() } } });
+      }
+      if (p.get('titles')?.startsWith('File:')) return route.fulfill({ json: { query: { pages: [filePage(1, p.get('titles').slice(5))] } } });
       if (p.has('generator')) {
         const title = p.get('gcmtitle');
         if (MISSING.concat(['Category:Empty']).includes(title)) return route.fulfill({ json: { batchcomplete: true, query: { pages: [] } } });
@@ -137,7 +148,7 @@ test('errors: unknown category warns, empty category says so, Commons down offer
   await page.getByText('No photos here.').waitFor();
   await context.close();
   let down = true;
-  ({ page, context } = await open('/?c=Test+cat', { commons: (route, p) => (down ? route.abort() : route.fulfill({ json: p.has('generator') ? listResponse(NAMES.slice(0, 2)) : { query: { pages: [{ title: 'Category:Test cat', categoryinfo: { files: 2 } }] } } })) }));
+  ({ page, context } = await open('/?c=Test+cat', { commons: (route, p) => (down ? route.abort() : route.fulfill({ json: p.get('cmtype') === 'file' ? { query: { categorymembers: NAMES.slice(0, 2).map((n, i) => ({ pageid: 1001 + i, ns: 6, title: `File:${n}` })) } } : p.has('pageids') ? { query: { pages: NAMES.slice(0, 2).map((n, i) => filePage(i + 1, n)) } } : { query: { pages: [{ title: 'Category:Test cat', categoryinfo: { files: 2 } }] } } })) }));
   await page.getByText('Could not reach Wikimedia Commons.').waitFor();
   down = false;
   await page.getByRole('button', { name: 'Retry' }).click();
@@ -225,15 +236,52 @@ test('Copy link puts the gallery link on the clipboard', async () => {
   await context.close();
 });
 
-test('Picture of the day: a quiet card on the home page that opens the archive, newest first', async () => {
+test('Picture of the day: a quiet card on the home page that opens that very photo, with an address that can be shared', async () => {
   const { page, context, violations } = await open();
   const card = page.locator('a.potd');
   await card.waitFor();
   assert.match(await card.innerText(), /Pointe Saint Mathieu - Phare/); assert.match(await card.innerText(), /JackyM59 · CC BY-SA 4\.0/);
+  assert.match(await card.getAttribute('href'), /\?f=Pointe\+Saint\+Mathieu\+-\+Phare\.jpg$/);
   await card.click();
-  await page.waitForFunction(() => location.search.includes('s=newest'));
-  assert.match(page.url(), /c=Pictures\+of\+the\+day\+(?:\(|%28)\d{4}(?:\)|%29)&s=newest/);
+  const dialog = page.locator('dialog.viewer');
+  await dialog.waitFor();
+  await page.getByText('1 / 1').waitFor();
+  assert.match(await dialog.getByRole('heading', { name: /Pointe Saint Mathieu - Phare/ }).innerText(), /Phare/);
+  assert.match(page.url(), /\?f=Pointe\+Saint\+Mathieu\+-\+Phare\.jpg$/); assert.doesNotMatch(page.url(), /[?&]c=/);
+  await page.waitForFunction(() => [...document.querySelectorAll('dialog.viewer .slide img')].some(i => i.complete && i.naturalWidth > 0));
+  await page.keyboard.press('Escape');
+  await dialog.waitFor({ state: 'detached' });
+  await card.waitFor(); // back on the home page
+  assert.doesNotMatch(page.url(), /[?&]f=/);
   assert.deepEqual(violations, []);
+  await context.close();
+});
+
+test('a shared photo address opens the viewer on it, and closing it goes home', async () => {
+  const { page, context } = await open('/?f=Alpha+one.jpg');
+  const dialog = page.locator('dialog.viewer');
+  await dialog.waitFor();
+  await dialog.getByRole('heading', { name: 'Alpha one' }).waitFor();
+  await page.keyboard.press('Escape');
+  await dialog.waitFor({ state: 'detached' });
+  await page.getByLabel('Category').waitFor();
+  assert.doesNotMatch(page.url(), /[?&]f=/);
+  await context.close();
+});
+
+test('sorting: Name and Newest each put the photos in the order Commons lists them, across pages', async () => {
+  const { page, context, seen } = await open('/?c=Test+cat');
+  const all = async () => { await page.waitForFunction(() => document.querySelectorAll('.tile').length === 5); return page.locator('.tile').evaluateAll(els => els.map(e => e.getAttribute('aria-label'))); }; // the next page loads by itself as it scrolls into range
+  assert.deepEqual(await all(), ['Alpha one', 'Bravo two', 'Charlie three', 'Delta four', 'Echo five']);
+  await page.getByRole('button', { name: 'Newest' }).click();
+  await page.waitForFunction(() => location.search.includes('s=newest'));
+  assert.deepEqual(await all(), ['Echo five', 'Delta four', 'Charlie three', 'Bravo two', 'Alpha one']);
+  assert.ok(seen.some(q => q.list === 'categorymembers' && q.cmsort === 'timestamp' && q.cmdir === 'desc'), 'newest asks Commons for the newest first');
+  assert.ok(seen.some(q => q.pageids === '1005|1004|1003'), 'the details are asked for in that same order');
+  await page.getByRole('button', { name: 'Name' }).click();
+  await page.waitForFunction(() => !location.search.includes('s=newest'));
+  assert.deepEqual(await all(), ['Alpha one', 'Bravo two', 'Charlie three', 'Delta four', 'Echo five']);
+  assert.ok(seen.some(q => q.list === 'categorymembers' && q.cmsort === 'sortkey' && q.cmdir === 'asc'));
   await context.close();
 });
 

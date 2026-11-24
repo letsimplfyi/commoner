@@ -9,7 +9,7 @@ https://commoner.letsimpl.fyi/?c=Nepal&c=Sunsets&x=Kathmandu&s=newest
 ```
 
 `c` is a category (repeat it to narrow down: every one must match), `x` leaves one out, `s=newest` sorts newest first,
-`d=1` or `d=0` forces subcategories on or off, `f=File name.jpg` opens the viewer on one photo. The home page shows the
+`d=1` or `d=0` forces subcategories on or off, `f=File name.jpg` opens the viewer on one photo (on its own when there is no `c`). The home page shows the
 Commons Picture of the day and a start list; typing predicts categories; **Filter** in a gallery adds or removes categories.
 
 **Deploy these files as-is. There is no build step and no `npm install`.** The UI is Preact + htm, vendored locally.

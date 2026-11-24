@@ -2,7 +2,7 @@ import { h, Component } from '../vendor/preact.module.js';
 import htm from '../vendor/htm.module.js';
 import { APP_VERSION, REPO_URL, LETSIMPL_URL, RECENT_KEEP } from './config.js';
 import { POPULAR, entryName, entryDeep, randomEntry } from './popular.js';
-import { parseRoute, parseInput, makeQuery, queryKey, queryTitle, usesSearch, fetchInfo, fetchFiles, gridSrc, viewSrc, displayTitle, shareUrl, pageUrl, categoryTitle } from './commons.js';
+import { parseRoute, parseInput, makeQuery, queryKey, queryTitle, usesSearch, fetchInfo, fetchFiles, fetchFile, gridSrc, viewSrc, displayTitle, shareUrl, pageUrl, categoryTitle } from './commons.js';
 import { Icon } from './icons.js';
 import { Typeahead } from './typeahead.js';
 import { pictureOfTheDay } from './feed.js';
@@ -29,7 +29,7 @@ function Notice({ kind = 'info', icon = 'info', children }) {
 
 export class App extends Component {
   state = { q: null, f: '', info: null, files: [], next: null, status: 'idle', error: null, viewer: null, toast: '', recent: readRecent(),
-    theme: document.documentElement.dataset.theme || 'light', skipped: 0, similar: [], potd: null, support: cleanSupport(supportStore.read()),
+    theme: document.documentElement.dataset.theme || 'light', skipped: 0, similar: [], potd: null, single: false, support: cleanSupport(supportStore.read()),
     supportOpen: false, filterOpen: false, refineMode: 'include', inputError: '', refineError: '', checking: false };
   abort = null; pages = 0; toastTimer = 0; io = null; similarFor = '';
 
@@ -39,6 +39,7 @@ export class App extends Component {
     if (justUpdated()) this.toast(`Updated to ${APP_VERSION}`);
     const route = readRoute();
     if (route.cats.length) this.load(route, route.f, { push: false });
+    else if (route.f) this.openSingle(route.f, { push: false });
     pictureOfTheDay().then(potd => this.setState({ potd })).catch(() => { /* the card simply stays away */ });
   }
   componentWillUnmount() { removeEventListener('commoner-update', this.refresh); removeEventListener('popstate', this.onPop); this.io?.disconnect(); }
@@ -46,7 +47,7 @@ export class App extends Component {
 
   onPop = () => {
     const route = readRoute();
-    if (!route.cats.length) return this.reset();
+    if (!route.cats.length) return route.f ? this.openSingle(route.f, { push: false }) : this.reset();
     if (!this.state.q || queryKey(route) !== queryKey(this.state.q)) return this.load(route, route.f, { push: false });
     const index = route.f ? this.state.files.findIndex(f => f.name === route.f) : -1;
     this.setState({ viewer: index >= 0 ? index : null });
@@ -54,7 +55,7 @@ export class App extends Component {
   reset() {
     this.abort?.abort();
     document.title = 'Commoner · Explore the commons.';
-    this.setState({ q: null, f: '', info: null, files: [], next: null, status: 'idle', error: null, viewer: null });
+    this.setState({ q: null, f: '', info: null, files: [], next: null, status: 'idle', error: null, viewer: null, single: false });
   }
   goHome = event => {
     event?.preventDefault();
@@ -116,7 +117,22 @@ export class App extends Component {
     this.setState({ viewer: index });
     if (next && index >= files.length - 4) this.more();
   };
-  closeViewer = () => { if (history.state?.v) history.back(); else this.setState({ viewer: null }); };
+  closeViewer = () => { if (history.state?.v) history.back(); else if (this.state.single) this.goHome(); else this.setState({ viewer: null }); };
+  // One photo on its own (the Picture of the day, or a shared ?f= address): the viewer over the home page.
+  async openSingle(name, { push = true } = {}) {
+    this.abort?.abort();
+    const ac = this.abort = new AbortController();
+    try {
+      const file = await fetchFile(name, { signal: ac.signal });
+      if (push) history.pushState({ v: 1 }, '', shareUrl(location.href, { cats: [] }, file.name));
+      document.title = `${displayTitle(file.name)} · Commoner`;
+      this.setState({ q: null, f: '', info: null, files: [file], next: null, status: 'idle', error: null, viewer: 0, single: true });
+    } catch (error) {
+      if (ac.signal.aborted) return;
+      if (!push) history.replaceState({}, '', location.pathname);
+      this.toast('Could not open that photo');
+    }
+  }
 
   toast(message) {
     clearTimeout(this.toastTimer);
@@ -162,7 +178,12 @@ export class App extends Component {
   removeCat = name => { const q = this.state.q; if (q.cats.length === 1) return this.goHome(); this.load({ ...q, cats: q.cats.filter(c => c !== name), deep: undefined }); };
   removeNot = name => { const q = this.state.q; this.load({ ...q, not: q.not.filter(c => c !== name), deep: undefined }); };
   toggleDeep = () => { const q = this.state.q; this.load({ ...q, deep: !q.deep }); };
-  changeSort = sort => { const q = this.state.q; if (sort !== q.sort) this.load({ ...q, sort }, '', { push: false }); };
+  changeSort = sort => {
+    const q = this.state.q;
+    if (sort === q.sort) return;
+    history.replaceState(history.state, '', shareUrl(location.href, { ...q, sort })); // the address follows the order, without a new history entry
+    this.load({ ...q, sort }, '', { push: false });
+  };
   clearRecent = () => { recentStore.write([]); this.setState({ recent: [] }); };
   observe = el => {
     this.io?.disconnect();
@@ -194,8 +215,7 @@ export class App extends Component {
   renderPotd() {
     const { potd } = this.state;
     if (!potd) return null;
-    const go = { cats: [`Pictures of the day (${new Date().getUTCFullYear()})`], sort: 'newest' };
-    return html`<a class="potd" href=${shareUrl(location.href, go)} onClick=${e => { e.preventDefault(); this.load(go); }}>
+    return html`<a class="potd" href=${shareUrl(location.href, { cats: [] }, potd.name)} onClick=${e => { e.preventDefault(); this.openSingle(potd.name); }}>
       <img src=${potd.thumb} alt=${potd.description || potd.label} width=${potd.width} height=${potd.height} />
       <span class="potd-cap"><b>${potd.label}</b><span class="meta">${[potd.artist, potd.license].filter(Boolean).join(' · ')}</span></span></a>`;
   }
@@ -297,7 +317,7 @@ export class App extends Component {
           ? html`<button class="quiet" type="button" onClick=${apply}>Update ready: restart</button>`
           : html`<button class="quiet" type="button" disabled=${this.state.checking} onClick=${this.checkUpdates} aria-label=${`Version ${APP_VERSION}, check for updates`}>${APP_VERSION}</button>`}</p>
       </footer>
-      ${viewer !== null && files[viewer] && html`<${Viewer} files=${files} index=${viewer} onIndex=${this.setViewerIndex} onClose=${this.closeViewer} onShare=${this.share} query=${q} />`}
+      ${viewer !== null && files[viewer] && html`<${Viewer} files=${files} index=${viewer} onIndex=${this.setViewerIndex} onClose=${this.closeViewer} onShare=${this.share} query=${q || { cats: [] }} />`}
       ${supportOpen && html`<${Support} ask=${shouldAsk(support)} onClose=${this.closeSupport} onCopied=${() => this.toast('Copied')} />`}
       <div class="toast-wrap" role="status">${toast && html`<span class="ls-toast">${toast}</span>`}</div>`;
   }

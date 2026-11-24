@@ -111,7 +111,7 @@ The address is the application state, so every gallery is shareable and the Back
 | `x` (repeatable) | a category to **leave out** |
 | `d=1` / `d=0` | force subcategories on / off. Default: off for one plain category, **on** as soon as there is a second category or a leave-out |
 | `s=newest` | newest first (default is Commons order for one category, best match for a search) |
-| `f` | a file name: opens the viewer on it |
+| `f` | a file name: opens the viewer on it (with no `c`, on that photo alone) |
 
 `parseRoute`, `shareUrl`, `makeQuery` in `js/commons.js` own this. `makeQuery` normalises (deduplicates, drops a leave-out that
 is also included, applies the `deep` default). **Always go through them**; never build these URLs by hand.
@@ -134,7 +134,12 @@ Facts about the Commons API that cost time to learn, so do not relearn them:
 - Plain `incategory` AND is often empty (photos sit in leaf categories). That is why subcategories default to on for combos.
 - **At most 50 pages get image info per request.** `PAGE_SIZE` is 50. Asking for more returns pages without `imageinfo`.
 - Pass the response's whole `continue` object back unchanged to page (`gcmcontinue`, `gsroffset`, `iicontinue`...).
-- With a generator, order comes from each page's `index`, not array order: `normaliseFiles` sorts by it.
+- **A category's page order is not in the response.** `generator=categorymembers` returns pages with no `index` (only
+  `generator=search` does), in no useful order, so sorting by it silently scrambled "Name" and "Newest". A plain category is
+  therefore fetched in two steps (`fetchFiles`): `list=categorymembers` with `cmsort` (`sortkey` or `timestamp`) and `cmdir`
+  gives the ordered ids, then `pageids=` (up to 50) gives the details, put back in list order. "Name" is the category's
+  own sort-key order (for Pictures of the day that is by date), "Newest" is when each file was added to the category.
+  Searches still order by the `index` they return. Never trust page order from a generator you have not seen the order of.
 - **Thumbnails come from `thumb.wikimedia.org`** (originals from `upload.wikimedia.org`). Wikimedia only serves fixed widths and
   never larger than the original: the grid uses 500, the viewer 1280; `resize()` falls back to the original URL for small
   files and SVGs. Both hosts must stay in the CSP; the e2e suite enforces the real CSP so this cannot regress silently.
@@ -179,7 +184,8 @@ Commons); the footer says Commons is open to everyone.
 
 One request a day to `https://api.wikimedia.org/feed/v1/wikipedia/en/featured/YYYY/MM/DD` (UTC date), reading only the
 `image` field. The result is kept in `localStorage` until the date changes. Only Wikimedia image hosts are accepted by
-`normaliseImage`. The card opens `Pictures of the day (YEAR)` newest first. If anything fails the card simply does not show.
+`normaliseImage`. The card opens that very photo in the viewer (`?f=<file name>`, no category, so it also works when the day's photo is not yet in
+the year's category); closing it returns home. If anything fails the card simply does not show.
 
 ### Support / donations (`js/support.js`, `js/upi.js`, `js/qr.js`)
 

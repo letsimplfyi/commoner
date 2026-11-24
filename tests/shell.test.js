@@ -45,3 +45,9 @@ test('the deploy workflow stamps the version into the worker and the app', () =>
   assert.match(workflow, /commoner-shell-dev/); assert.match(workflow, /APP_VERSION = 'dev'/); assert.match(workflow, /GITHUB_RUN_NUMBER/);
   assert.match(workflow, /sw\.js/);
 });
+
+test('AGENTS.md describes every file in js/ and the rules agents must keep', () => {
+  const agents = read('AGENTS.md');
+  for (const file of readdirSync(new URL('../js/', import.meta.url))) assert.ok(agents.includes(file), `AGENTS.md does not mention js/${file}`);
+  for (const phrase of ['brand.letsimpl.fyi', 'Agents create no brand material', 'exactly as given', 'No third-party requests', 'skipWaiting', 'commoner-shell-dev', '[skip ci]']) assert.ok(agents.includes(phrase), `AGENTS.md lost: ${phrase}`);
+});

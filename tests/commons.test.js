@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   parseCategory, parseInput, parseRoute, makeQuery, queryKey, queryTitle, usesSearch, searchTerm, pageUrl, shareUrl, listUrl, infoUrl, existsUrl, countUrl,
-  suggestUrl, filesByIdUrl, fileUrl, fetchFiles, fetchFile, normaliseSuggestions, gridSrc, viewSrc, resize, plain, displayTitle, normaliseFiles, normaliseInfo, normaliseExists, getJson, fetchInfo, CommonsError,
+  suggestUrl, listsBySearch, mediaKind, filesByIdUrl, fileUrl, fetchFiles, fetchFile, normaliseSuggestions, gridSrc, viewSrc, resize, plain, displayTitle, normaliseFiles, normaliseInfo, normaliseExists, getJson, fetchInfo, CommonsError,
 } from '../js/commons.js';
 import { POPULAR, allPopular, entryName, entryDeep, randomEntry } from '../js/popular.js';
 import { page, listResponse } from './fixtures.js';
@@ -53,18 +53,20 @@ test('the home box accepts a name, a Commons link or a shared Commoner link with
 });
 
 test('one plain category lists its members; anything else becomes a Commons search with AND and NOT', () => {
-  const plainUrl = new URL(listUrl('Foo bar', { sort: 'newest', cont: { cmcontinue: 'file|XYZ|1', continue: '-||' } })).searchParams;
-  assert.equal(plainUrl.get('list'), 'categorymembers'); assert.equal(plainUrl.get('cmtitle'), 'Category:Foo bar'); assert.equal(plainUrl.get('cmsort'), 'timestamp');
-  assert.equal(plainUrl.get('cmdir'), 'desc'); assert.equal(plainUrl.get('cmcontinue'), 'file|XYZ|1'); assert.equal(plainUrl.get('origin'), '*'); assert.equal(plainUrl.get('cmlimit'), '50');
-  assert.equal(plainUrl.get('generator'), null, 'a generator gives no order for category members, so it is not used');
-  const byName = new URL(listUrl('Foo')).searchParams;
-  assert.equal(byName.get('cmsort'), 'sortkey'); assert.equal(byName.get('cmdir'), 'asc');
+  const byName = new URL(listUrl('Foo bar', { sort: 'name', cont: { cmcontinue: 'file|XYZ|1', continue: '-||' } })).searchParams;
+  assert.equal(byName.get('list'), 'categorymembers'); assert.equal(byName.get('cmtitle'), 'Category:Foo bar'); assert.equal(byName.get('cmsort'), 'sortkey');
+  assert.equal(byName.get('cmdir'), 'asc'); assert.equal(byName.get('cmcontinue'), 'file|XYZ|1'); assert.equal(byName.get('origin'), '*'); assert.equal(byName.get('cmlimit'), '50');
+  assert.equal(byName.get('generator'), null, 'a generator gives no order for category members, so it is not used');
+  assert.equal(listsBySearch('Foo'), false);
+  const newest = new URL(listUrl('Foo bar', { sort: 'newest' })).searchParams;
+  assert.equal(newest.get('generator'), 'search', 'newest means most recently uploaded, which a category listing cannot give');
+  assert.equal(newest.get('gsrsearch'), 'incategory:"Foo bar"'); assert.equal(newest.get('gsrsort'), 'create_timestamp_desc'); assert.equal(listsBySearch({ cats: ['Foo'], sort: 'newest' }), true);
   const q = { cats: ['Nepal', 'Sunsets'], not: ['Kathmandu'], sort: 'newest' };
   assert.equal(searchTerm(q), 'deepcategory:"Nepal" deepcategory:"Sunsets" -deepcategory:"Kathmandu"');
   assert.equal(searchTerm({ cats: ['A', 'B'], deep: false }), 'incategory:"A" incategory:"B"');
   const search = new URL(listUrl(q, { cont: { gsroffset: '50', continue: 'gsroffset||' } })).searchParams;
   assert.equal(search.get('generator'), 'search'); assert.equal(search.get('gsrnamespace'), '6'); assert.equal(search.get('gsrsort'), 'create_timestamp_desc');
-  assert.equal(search.get('gsroffset'), '50'); assert.equal(search.get('gsrsearch'), searchTerm(q)); assert.equal(search.get('iiurlwidth'), '500');
+  assert.equal(search.get('gsroffset'), '50'); assert.equal(search.get('gsrsearch'), searchTerm(q)); assert.equal(search.get('viurlwidth'), '500'); assert.match(search.get('viprop'), /mediatype/);
   assert.equal(new URL(listUrl({ cats: ['A', 'B'] })).searchParams.get('gsrsort'), 'relevance');
   assert.equal(new URL(countUrl(q)).searchParams.get('srinfo'), 'totalhits');
   assert.equal(new URL(existsUrl(['A', 'B'])).searchParams.get('titles'), 'Category:A|Category:B');
@@ -91,16 +93,37 @@ test('plain text and titles', () => {
   assert.equal(plain(undefined), '');
   assert.equal(displayTitle('Brick_building seen (2026-11-23-1456).jpg'), 'Brick building seen (2026-11-23-1456)');
 });
-test('normaliseFiles keeps API order, drops non-images and passes continuation on', () => {
+test('normaliseFiles keeps API order and every kind of file, and passes continuation on', () => {
   const json = listResponse(['A.jpg', 'B.jpg', 'C.jpg'], { gcmcontinue: 'file|C|9', continue: 'gcmcontinue||' });
-  json.query.pages.push({ pageid: 5, title: 'File:Clip.webm', index: 4, imageinfo: [{ url: 'u', mime: 'video/webm', width: 1, height: 1 }] });
-  json.query.pages.push({ pageid: 6, title: 'File:Gone.jpg', index: 5 });
+  json.query.pages.push({ pageid: 5, title: 'File:Clip.ogv', index: 4, videoinfo: [{ url: 'https://upload.wikimedia.org/c.ogv', mime: 'application/ogg', mediatype: 'VIDEO', duration: 96.9, width: 400, height: 288, thumburl: 'https://thumb.wikimedia.org/c.jpg',
+    derivatives: [{ src: 'https://upload.wikimedia.org/c.webm', type: 'video/webm; codecs="vp9, opus"' }, { src: 'https://evil.example/c.mp4', type: 'video/mp4' }] }] });
+  json.query.pages.push({ pageid: 6, title: 'File:Song.ogg', index: 5, videoinfo: [{ url: 'https://upload.wikimedia.org/s.ogg', mime: 'application/ogg', mediatype: 'AUDIO', duration: 67, thumburl: 'https://commons.wikimedia.org/w/resources/assets/file-type-icons/fileicon-ogg.png' }] });
+  json.query.pages.push({ pageid: 7, title: 'File:Paper.pdf', index: 6, videoinfo: [{ url: 'https://upload.wikimedia.org/p.pdf', mime: 'application/pdf', mediatype: 'OFFICE', thumburl: 'https://thumb.wikimedia.org/p.jpg' }] });
+  json.query.pages.push({ pageid: 8, title: 'File:Gone.jpg', index: 7 });
   const out = normaliseFiles(json);
-  assert.deepEqual(out.files.map(f => f.name), ['A.jpg', 'B.jpg', 'C.jpg']);
-  assert.equal(out.skipped, 2); assert.deepEqual(out.next, { gcmcontinue: 'file|C|9', continue: 'gcmcontinue||' });
+  assert.deepEqual(out.files.map(f => f.name), ['A.jpg', 'B.jpg', 'C.jpg', 'Clip.ogv', 'Song.ogg', 'Paper.pdf']);
+  assert.deepEqual(out.files.map(f => f.kind), ['image', 'image', 'image', 'video', 'audio', 'document']);
+  assert.equal(out.skipped, 1, 'only a page with no file information is unavailable'); assert.deepEqual(out.next, { gcmcontinue: 'file|C|9', continue: 'gcmcontinue||' });
+  assert.deepEqual(out.files[3].sources, [{ src: 'https://upload.wikimedia.org/c.webm', type: 'video/webm; codecs="vp9, opus"' }], 'only versions from the Wikimedia upload host');
+  assert.equal(out.files[3].duration, 96.9); assert.equal(out.files[4].thumb, '', "Commons' generic audio icon is not a thumbnail"); assert.equal(out.files[5].thumb, 'https://thumb.wikimedia.org/p.jpg');
   assert.equal(out.files[0].description, 'Brick building & sky'); assert.equal(out.files[0].author, 'Vysakh Premkumar');
-  assert.equal(out.files[0].license, 'CC BY-SA 4.0'); assert.equal(out.files[0].page, 'https://commons.wikimedia.org/wiki/File:A.jpg');
+  assert.equal(out.files[0].license, 'CC BY-SA 4.0'); assert.equal(out.files[0].page, 'https://commons.wikimedia.org/wiki/File:A.jpg'); assert.ok(out.files[0].id > 0);
   assert.deepEqual(normaliseFiles({}), { files: [], next: null, skipped: 0 });
+});
+test('media kind: by what Commons says it is, then by file name', () => {
+  assert.equal(mediaKind({ mediatype: 'VIDEO', mime: 'application/ogg' }, 'a.ogv'), 'video');
+  assert.equal(mediaKind({ mediatype: 'AUDIO', mime: 'application/ogg' }, 'a.ogg'), 'audio');
+  assert.equal(mediaKind({ mediatype: 'OFFICE', mime: 'image/vnd.djvu' }, 'a.djvu'), 'document', 'a DjVu is a document even though its type starts with image/');
+  assert.equal(mediaKind({ mediatype: 'BITMAP', mime: 'image/jpeg' }, 'a.jpg'), 'image'); assert.equal(mediaKind({ mediatype: 'DRAWING', mime: 'image/svg+xml' }, 'a.svg'), 'image');
+  assert.equal(mediaKind({ mime: 'application/ogg' }, 'clip.webm'), 'video'); assert.equal(mediaKind({ mime: 'application/ogg' }, 'song.flac'), 'audio');
+  assert.equal(mediaKind({ mediatype: '3D', mime: 'application/sla' }, 'a.stl'), 'other');
+});
+test('thumbnails: a picture falls back to the original, a video or a document uses its own thumbnail, audio has none', () => {
+  const thumb = 'https://thumb.wikimedia.org/wikipedia/commons/thumb/a/ab/Clip.ogv/500px--Clip.ogv.jpg';
+  assert.equal(gridSrc({ kind: 'video', thumb, url: 'u' }), thumb);
+  assert.equal(viewSrc({ kind: 'video', thumb, url: 'u' }), thumb.replace('500px', '1280px'));
+  assert.equal(gridSrc({ kind: 'audio', thumb: '', url: 'https://upload.wikimedia.org/s.ogg' }), '', 'never an audio file as an image source');
+  assert.equal(gridSrc({ kind: 'image', thumb: 'https://thumb.wikimedia.org/x/500px-A.jpg', url: 'u', width: 100, mime: 'image/jpeg' }), 'u');
 });
 test('category info: missing, empty, populated (with subcategories and parents)', () => {
   assert.deepEqual(normaliseInfo({ query: { pages: [{ title: 'Category:X', missing: true }] } }), { exists: false, files: 0, subcats: [], parents: [], missing: [] });
@@ -144,10 +167,10 @@ test('a plain category keeps the order of its member list, however the photo det
     if (p.get('list') === 'categorymembers') return { continue: { cmcontinue: 'file|NEXT|1', continue: '-||' }, query: { categorymembers: members } };
     return { query: { pages: [detail(20, 'Oldest.jpg'), detail(30, 'Newest.jpg'), detail(10, 'Middle.jpg')] } }; // scrambled on purpose
   });
-  const page = await fetchFiles('Pictures', { sort: 'newest', fetchImpl });
-  assert.deepEqual(page.files.map(f => f.name), ['Newest.jpg', 'Middle.jpg', 'Oldest.jpg']);
+  const page = await fetchFiles('Pictures', { sort: 'name', fetchImpl });
+  assert.deepEqual(page.files.map(f => f.name), ['Newest.jpg', 'Middle.jpg', 'Oldest.jpg']); // the member list's order, not the details'
   assert.deepEqual(page.next, { cmcontinue: 'file|NEXT|1', continue: '-||' });
-  assert.equal(calls[0].cmsort, 'timestamp'); assert.equal(calls[1].pageids, '30|10|20');
+  assert.equal(calls[0].cmsort, 'sortkey'); assert.equal(calls[1].pageids, '30|10|20');
   assert.equal(page.skipped, 0);
 });
 test('a category listing continues with the cmcontinue it was given, and an empty category makes no second request', async () => {

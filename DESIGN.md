@@ -12,7 +12,7 @@ that repeat the label, icons where the meaning is obvious (copy link, share, bac
 
 | Screen | What is on it |
 | --- | --- |
-| Home | A category box with predictions, the Commons Picture of the day, five start chips plus Surprise me, a fold of ~200 more categories in groups, a short Recent list |
+| Home | A category box with predictions, the Commons Picture of the day, five start chips plus Surprise me and Around me, a fold of ~200 more categories in groups, a short Recent list |
 | Gallery | Back, the title, a file count, icon actions (share, copy link), Filter, sort; edge-to-edge square tiles, 3 columns on a phone |
 | Filter | Chips for the categories in play, Add or Leave out, a category box with predictions, a Subcategories switch |
 | Viewer | Full-screen native `<dialog>`; a sideways scroll-snap track gives native swipe; arrows on desktop; one-line caption with icon actions |
@@ -29,7 +29,9 @@ that repeat the label, icons where the meaning is obvious (copy link, share, bac
 | Predictions | Commons prefix search, 250 ms debounce, arrow keys, Enter, Escape; a combobox for assistive tech |
 | Start list | Hand-picked, community-curated or plainly broad; checked by `npm run popular:check`. Nothing likely to surface nudity |
 | Picture of the day | Wikimedia Feed API, one request a day, kept on the device; the card opens that photo in the viewer (`?f=`), not the archive |
-| Non-photos | Video, audio and documents are skipped and counted |
+| Every kind of file | Video and audio play in the viewer (Commons' playable versions); a PDF or DjVu shows a page and a link; anything else a link. Tiles carry a small play, speaker or document badge |
+| Sorting | Name is Commons' own order for the category (alphabetical unless the category sets its own sort keys, as Pictures of the day does); Newest is the most recently uploaded, because Commons can only order a category by when a file was added to it |
+| Around me | One tap: the device position (rounded to ~100 m, never stored) or a place by name, the nearest photos first with their distance, 1, 5 or 10 km. No map yet: OpenStreetMap tiles would tell a third party roughly where the user is, so that is a separate decision |
 | Storage | Theme, the last 10 galleries, the support preference: on the device only |
 | Updates | Service worker with per-deploy cache busting and safe restarts (see README) |
 | Support | After 3 galleries, then rarely; never after "Don't ask again"; UPI only; the donor picks the amount |

@@ -3,6 +3,7 @@ import htm from '../vendor/htm.module.js';
 import { APP_VERSION, REPO_URL, LETSIMPL_URL, RECENT_KEEP } from './config.js';
 import { POPULAR, entryName, entryDeep, randomEntry } from './popular.js';
 import { parseRoute, parseInput, makeQuery, queryKey, queryTitle, usesSearch, fetchInfo, fetchFiles, fetchFile, gridSrc, viewSrc, displayTitle, shareUrl, pageUrl, categoryTitle } from './commons.js';
+import { parseNear, nearAsked, nearUrl, nearKey, formatDistance, fetchNear, fetchPlace, locate, RADII } from './near.js';
 import { Icon } from './icons.js';
 import { Typeahead } from './typeahead.js';
 import { pictureOfTheDay } from './feed.js';
@@ -22,6 +23,9 @@ const searchOf = q => new URL(shareUrl(location.href, q)).search;
 const readRecent = () => (recentStore.read() || []).filter(s => typeof s === 'string').map(s => (s.startsWith('?') ? s : searchOf({ cats: [s] }))).slice(0, RECENT_KEEP);
 const readRoute = () => parseRoute(location.search);
 const NOT_A_CATEGORY = 'Not a Commons category.';
+const KIND_ICON = { video: 'play', audio: 'audio', document: 'file', other: 'file' };
+const KIND_NAME = { video: 'video', audio: 'audio', document: 'document', other: 'file' };
+const withKind = file => (file.kind === 'image' ? displayTitle(file.name) : `${displayTitle(file.name)}, ${KIND_NAME[file.kind]}`);
 
 function Notice({ kind = 'info', icon = 'info', children }) {
   return html`<div class="ls-callout ls-callout--${kind}" role=${kind === 'error' ? 'alert' : 'note'}><${Icon} name=${icon} /><div>${children}</div></div>`;
@@ -29,7 +33,7 @@ function Notice({ kind = 'info', icon = 'info', children }) {
 
 export class App extends Component {
   state = { q: null, f: '', info: null, files: [], next: null, status: 'idle', error: null, viewer: null, toast: '', recent: readRecent(),
-    theme: document.documentElement.dataset.theme || 'light', skipped: 0, similar: [], potd: null, single: false, support: cleanSupport(supportStore.read()),
+    theme: document.documentElement.dataset.theme || 'light', skipped: 0, similar: [], potd: null, single: false, nearOpen: nearAsked(location.search), near: parseNear(location.search), locating: false, nearNotice: '', placeOpen: false, support: cleanSupport(supportStore.read()),
     supportOpen: false, filterOpen: false, refineMode: 'include', inputError: '', refineError: '', checking: false };
   abort = null; pages = 0; toastTimer = 0; io = null; similarFor = '';
 
@@ -39,6 +43,7 @@ export class App extends Component {
     if (justUpdated()) this.toast(`Updated to ${APP_VERSION}`);
     const route = readRoute();
     if (route.cats.length) this.load(route, route.f, { push: false });
+    else if (parseNear(location.search)) this.loadNear(parseNear(location.search), route.f, { push: false });
     else if (route.f) this.openSingle(route.f, { push: false });
     pictureOfTheDay().then(potd => this.setState({ potd })).catch(() => { /* the card simply stays away */ });
   }
@@ -46,7 +51,12 @@ export class App extends Component {
   refresh = () => this.forceUpdate();
 
   onPop = () => {
-    const route = readRoute();
+    const route = readRoute(), near = parseNear(location.search);
+    if (near) {
+      if (this.state.near && nearKey(near) === nearKey(this.state.near)) { const index = route.f ? this.state.files.findIndex(f => f.name === route.f) : -1; return this.setState({ viewer: index >= 0 ? index : null }); }
+      return this.loadNear(near, route.f, { push: false });
+    }
+    if (nearAsked(location.search)) { this.abort?.abort(); return this.setState({ q: null, near: null, nearOpen: true, files: [], next: null, status: 'idle', viewer: null, single: false, nearNotice: '' }); }
     if (!route.cats.length) return route.f ? this.openSingle(route.f, { push: false }) : this.reset();
     if (!this.state.q || queryKey(route) !== queryKey(this.state.q)) return this.load(route, route.f, { push: false });
     const index = route.f ? this.state.files.findIndex(f => f.name === route.f) : -1;
@@ -55,7 +65,7 @@ export class App extends Component {
   reset() {
     this.abort?.abort();
     document.title = 'Commoner · Explore the commons.';
-    this.setState({ q: null, f: '', info: null, files: [], next: null, status: 'idle', error: null, viewer: null, single: false });
+    this.setState({ q: null, f: '', info: null, files: [], next: null, status: 'idle', error: null, viewer: null, single: false, nearOpen: false, near: null, locating: false, nearNotice: '', placeOpen: false });
   }
   goHome = event => {
     event?.preventDefault();
@@ -85,7 +95,7 @@ export class App extends Component {
   }
 
   addPage(page, key) {
-    if (!this.state.q || queryKey(this.state.q) !== key) return;
+    if (this.currentKey() !== key) return;
     this.pages += 1;
     if (this.pages === 1 && page.files.length) { const support = countGallery(this.state.support); supportStore.write(support); this.setState({ support }); }
     const files = [...this.state.files, ...page.files];
@@ -99,16 +109,17 @@ export class App extends Component {
     });
   }
 
+  currentKey() { const { q, near } = this.state; return q ? queryKey(q) : near ? nearKey(near) : null; }
   more = async () => {
-    const { q, next, status } = this.state;
+    const { q, near, next, status } = this.state;
     if (!next || status !== 'ready') return;
-    const ac = this.abort, key = queryKey(q);
+    const ac = this.abort, key = this.currentKey();
     this.setState({ status: 'more' });
-    try { this.addPage(await fetchFiles(q, { cont: next, signal: ac.signal }), key); }
+    try { this.addPage(q ? await fetchFiles(q, { cont: next, signal: ac.signal }) : await fetchNear(near, { cont: next, signal: ac.signal }), key); }
     catch (error) { if (!ac.signal.aborted) this.setState({ status: 'ready', error }); }
   };
 
-  urlFor = (file = '') => shareUrl(location.href, this.state.q, file);
+  urlFor = (file = '') => (this.state.near && !this.state.q ? nearUrl(location.href, this.state.near, file) : shareUrl(location.href, this.state.q || { cats: [] }, file));
   openViewer = index => { history.pushState({ v: 1 }, '', this.urlFor(this.state.files[index].name)); this.setState({ viewer: index }); };
   setViewerIndex = index => {
     const { files, next } = this.state;
@@ -133,6 +144,39 @@ export class App extends Component {
       this.toast('Could not open that photo');
     }
   }
+
+  // ---- around me: the nearest photos to a place, from the device position or a place chosen by name
+  aroundMe = () => {
+    history.pushState({}, '', `${location.pathname}?near=`);
+    this.setState({ q: null, near: null, nearOpen: true, files: [], next: null, status: 'idle', viewer: null, single: false });
+    this.useMyLocation();
+  };
+  useMyLocation = async () => {
+    this.setState({ locating: true, nearNotice: '', placeOpen: false });
+    try { await this.loadNear(await locate()); }
+    catch (error) {
+      if (!this.state.nearOpen) return;
+      this.setState({ locating: false, nearNotice: error?.code === 1 ? 'Location is off for Commoner. Pick a place instead.' : 'Could not find your location. Pick a place instead.' });
+    }
+  };
+  async loadNear(input, f = '', { push = true } = {}) {
+    const near = { lat: input.lat, lon: input.lon, r: input.r || RADII[0] }, key = nearKey(near);
+    this.abort?.abort();
+    const ac = this.abort = new AbortController();
+    this.pages = 0;
+    if (push) history.pushState({}, '', nearUrl(location.href, near));
+    else if (history.state?.v) history.replaceState({}, '', nearUrl(location.href, near));
+    document.title = 'Around me · Commoner';
+    this.setState({ q: null, near, nearOpen: true, f, info: null, files: [], next: null, status: 'loading', error: null, viewer: null, single: false, locating: false, nearNotice: '', placeOpen: false });
+    try { this.addPage(await fetchNear(near, { signal: ac.signal }), key); }
+    catch (error) { if (!ac.signal.aborted) this.setState({ status: 'error', error }); }
+  }
+  changeRadius = r => { const near = this.state.near; if (near && r !== near.r) { history.replaceState(history.state, '', nearUrl(location.href, { ...near, r })); this.loadNear({ ...near, r }, '', { push: false }); } };
+  pickPlace = async name => {
+    this.setState({ nearNotice: '', locating: true });
+    try { await this.loadNear(await fetchPlace(name)); }
+    catch (error) { this.setState({ locating: false, nearNotice: error.message || 'Could not open that place.' }); }
+  };
 
   toast(message) {
     clearTimeout(this.toastTimer);
@@ -227,7 +271,7 @@ export class App extends Component {
     return html`<section>
       <${Typeahead} id="category" label="Category" placeholder="Search categories" submitLabel="Open" error=${inputError} onPick=${name => this.load({ cats: [name] })} onText=${this.openText} />
       ${this.renderPotd()}
-      <ul class="ls-tags start">${first.items.slice(0, 5).map(tag)}<li><button class="ls-tag" type="button" onClick=${this.surprise}>Surprise me</button></li></ul>
+      <ul class="ls-tags start">${first.items.slice(0, 5).map(tag)}<li><button class="ls-tag" type="button" onClick=${this.surprise}>Surprise me</button></li><li><button class="ls-tag" type="button" onClick=${this.aroundMe}>Around me</button></li></ul>
       <details class="more-cats"><summary>More categories</summary>
         ${[first, ...rest].map(g => html`<h2>${g.title}</h2><ul class="ls-tags">${g.items.map(tag)}</ul>`)}</details>
       ${recent.length > 0 && html`<h2>Recent <button class="quiet" type="button" onClick=${this.clearRecent}>Clear</button></h2>
@@ -249,6 +293,35 @@ export class App extends Component {
       <${Typeahead} id="refine" label=${refineMode === 'exclude' ? 'Leave out' : 'Add category'} hideLabel placeholder="Search categories" submitLabel=${refineMode === 'exclude' ? 'Leave out' : 'Add'} error=${refineError} onPick=${this.refine} onText=${this.refineText} />
       <label class="check"><input type="checkbox" checked=${q.deep} onChange=${this.toggleDeep} /> Subcategories</label>
     </div>`;
+  }
+
+  renderGrid() {
+    return html`<div class="grid">${this.state.files.map((file, i) => {
+      const src = gridSrc(file);
+      return html`<button type="button" class="tile" key=${file.name} onClick=${() => this.openViewer(i)} aria-label=${withKind(file)}>
+        ${src ? html`<img src=${src} alt="" loading=${i < 12 ? 'eager' : 'lazy'} decoding="async" width=${GRID_W} height=${GRID_W} />` : html`<span class="blank"><${Icon} name=${KIND_ICON[file.kind]} /></span>`}
+        ${file.kind !== 'image' && html`<span class="badge" aria-hidden="true"><${Icon} name=${KIND_ICON[file.kind]} small /></span>`}</button>`;
+    })}</div>`;
+  }
+
+  renderNear() {
+    const { near, files, next, status, error, locating, nearNotice, placeOpen } = this.state;
+    const empty = near && status === 'ready' && !files.length;
+    return html`<section>
+      <div class="titlebar"><a class="back" href="./" onClick=${this.goHome} aria-label="Back to categories"><${Icon} name="back" /></a><h1>Around me</h1></div>
+      ${locating && html`<p class="status" role="status">Finding the place</p>`}
+      ${nearNotice && html`<${Notice} kind="warning" icon="alert">${nearNotice}<//>`}
+      ${near && html`<div class="actions">
+        <div class="segmented" role="group" aria-label="Distance">${RADII.map(r => html`<button type="button" class="ls-btn ls-btn--small" aria-pressed=${near.r === r} onClick=${() => this.changeRadius(r)}>${r / 1000} km</button>`)}</div>
+        <button class="ls-btn ls-btn--small" type="button" aria-expanded=${placeOpen} onClick=${() => this.setState({ placeOpen: !placeOpen })}>Another place</button></div>`}
+      ${(!near || placeOpen) && !locating && html`<div class="actions"><button class="ls-btn" type="button" onClick=${this.useMyLocation}><${Icon} name="pin" small /> Use my location</button></div>
+        <${Typeahead} id="place" label="Place" placeholder="Search a place" submitLabel="Go" onPick=${this.pickPlace} onText=${text => { this.pickPlace(text); return true; }} />`}
+      ${status === 'error' && html`<${Notice} kind="error" icon="alert">${error?.message || 'Something went wrong.'} <button class="ls-btn ls-btn--small" type="button" onClick=${() => this.loadNear(near, '', { push: false })}><${Icon} name="retry" small /> Retry</button><//>`}
+      ${empty && html`<${Notice}>No photos here${near.r < RADII[RADII.length - 1] ? '. Try a wider distance.' : '.'}<//>`}
+      ${this.renderGrid()}
+      ${status === 'more' && html`<p class="status" role="status">Loading</p>`}
+      ${next && html`<div class="more" ref=${this.observe}><button class="ls-btn" type="button" onClick=${this.more} disabled=${status !== 'ready'}>More</button></div>`}
+    </section>`;
   }
 
   renderSupportCard() {
@@ -275,7 +348,7 @@ export class App extends Component {
     return html`<section>
       <div class="titlebar"><a class="back" href="./" onClick=${this.goHome} aria-label="Back to categories"><${Icon} name="back" /></a>
         <h1>${queryTitle(q)}</h1></div>
-      <p class="meta">${info ? `${info.files} ${info.files === 1 ? 'file' : 'files'}` : status === 'loading' ? 'Loading' : ''}${skipped ? ` · ${skipped} not photos` : ''}</p>
+      <p class="meta">${info ? `${info.files} ${info.files === 1 ? 'file' : 'files'}` : status === 'loading' ? 'Loading' : ''}${skipped ? ` · ${skipped} unavailable` : ''}</p>
       <div class="actions">
         ${navigator.share && html`<button class="ls-btn ls-btn--small" type="button" onClick=${() => this.share(queryTitle(q), this.urlFor())} aria-label="Share"><${Icon} name="share" small /></button>`}
         <button class="ls-btn ls-btn--small" type="button" onClick=${this.copyLink} aria-label="Copy link"><${Icon} name="link" small /></button>
@@ -291,8 +364,7 @@ export class App extends Component {
       ${status !== 'loading' && status !== 'error' && files.length === 0 && !next && html`<${Notice} kind=${missing ? 'warning' : 'info'} icon=${missing ? 'alert' : 'info'}>${missing
         ? html`No category “${info.missing[0] || q.cats[0]}”.${similar.length > 0 && html` Did you mean<ul class="ls-tags">${similar.map(tagLink)}</ul>`}`
         : search ? 'No matches. Remove a category or include subcategories.' : 'No photos here. Try subcategories.'}<//>`}
-      <div class="grid">${files.map((file, i) => html`<button type="button" class="tile" onClick=${() => this.openViewer(i)} aria-label=${displayTitle(file.name)}>
-        <img src=${gridSrc(file)} alt="" loading=${i < 12 ? 'eager' : 'lazy'} decoding="async" width=${GRID_W} height=${GRID_W} /></button>`)}</div>
+      ${this.renderGrid()}
       ${status === 'more' && html`<p class="status" role="status">Loading</p>`}
       ${error && status === 'ready' && html`<${Notice} kind="error" icon="alert">${error.message}<//>`}
       ${next && html`<div class="more" ref=${this.observe}><button class="ls-btn" type="button" onClick=${this.more} disabled=${status !== 'ready'}>More</button></div>`}
@@ -310,14 +382,14 @@ export class App extends Component {
           <span>Commoner</span></a>
         <button class="ls-btn ls-btn--small theme" type="button" onClick=${this.toggleTheme} aria-label=${theme === 'dark' ? 'Light theme' : 'Dark theme'}><${Icon} name=${theme === 'dark' ? 'sun' : 'moon'} small /></button>
       </div></header>
-      <main id="main" class="page">${q ? this.renderGallery() : this.renderHome()}</main>
+      <main id="main" class="page">${q ? this.renderGallery() : this.state.nearOpen ? this.renderNear() : this.renderHome()}</main>
       <footer class="page foot">
         <p>Unofficial. Photos come from Wikimedia Commons, open to everyone, each with its own licence.</p>
         <p><a href=${REPO_URL} target="_blank" rel="noopener noreferrer">Source</a> · <button class="quiet" type="button" onClick=${this.openSupport}>Support</button> · ${updateState.ready
           ? html`<button class="quiet" type="button" onClick=${apply}>Update ready: restart</button>`
           : html`<button class="quiet" type="button" disabled=${this.state.checking} onClick=${this.checkUpdates} aria-label=${`Version ${APP_VERSION}, check for updates`}>${APP_VERSION}</button>`}</p>
       </footer>
-      ${viewer !== null && files[viewer] && html`<${Viewer} files=${files} index=${viewer} onIndex=${this.setViewerIndex} onClose=${this.closeViewer} onShare=${this.share} query=${q || { cats: [] }} />`}
+      ${viewer !== null && files[viewer] && html`<${Viewer} files=${files} index=${viewer} onIndex=${this.setViewerIndex} onClose=${this.closeViewer} onShare=${this.share} shareHref=${file => this.urlFor(file.name)} />`}
       ${supportOpen && html`<${Support} ask=${shouldAsk(support)} onClose=${this.closeSupport} onCopied=${() => this.toast('Copied')} />`}
       <div class="toast-wrap" role="status">${toast && html`<span class="ls-toast">${toast}</span>`}</div>`;
   }
@@ -351,6 +423,23 @@ class Support extends Component {
       ${ask && html`<div class="actions"><button class="ls-btn" type="button" onClick=${() => this.props.onClose('later')}>Not now</button><button class="quiet" type="button" onClick=${() => this.props.onClose('never')}>Don’t ask again</button></div>`}
     </dialog>`;
   }
+}
+
+const formatTime = seconds => { const s = Math.round(seconds); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
+// One slide. Pictures load when near the current one; a video or an audio file only loads once it is the current one, so
+// swiping past never starts a download. The browser plays the first version it supports (Commons' transcodes, then the original).
+function Slide({ file, distance }) {
+  const alt = file.description || displayTitle(file.name);
+  const poster = viewSrc(file);
+  if (file.kind === 'image') return distance <= 2 ? html`<img src=${poster} alt=${alt} decoding="async" />` : null;
+  if (distance > 2) return null;
+  const sources = [...file.sources, { src: file.url, type: file.mime }].map(v => html`<source src=${v.src} type=${v.type} />`);
+  const open = html`<a class="ls-btn ls-btn--outbound" href=${file.url} target="_blank" rel="noopener noreferrer">Open the file</a>`;
+  if (file.kind === 'video') return distance === 0
+    ? html`<video controls playsinline preload="metadata" poster=${poster || undefined} aria-label=${alt}>${sources}${open}</video>`
+    : poster && html`<img src=${poster} alt=${alt} decoding="async" />`;
+  if (file.kind === 'audio') return html`<div class="media-card"><${Icon} name="audio" />${distance === 0 && html`<audio controls preload="none" aria-label=${alt}>${sources}${open}</audio>`}</div>`;
+  return html`<div class="media-card">${poster && html`<img src=${poster} alt=${alt} decoding="async" />`}${!poster && html`<${Icon} name="file" />`}${open}</div>`;
 }
 
 class Viewer extends Component {
@@ -389,10 +478,10 @@ class Viewer extends Component {
     else if (event.key === 'ArrowRight') { event.preventDefault(); this.go(1); }
   };
 
-  render({ files, index, onClose, onShare, query }, { details }) {
+  render({ files, index, onClose, onShare, shareHref }, { details }) {
     const file = files[index];
     const title = displayTitle(file.name);
-    const meta = [file.license, file.author, file.date].filter(Boolean).join(' · ');
+    const meta = [Number.isFinite(file.dist) ? formatDistance(file.dist) : '', file.license, file.author, file.date].filter(Boolean).join(' · ');
     return html`<dialog class="viewer" ref=${el => { this.dialog = el; }} aria-label=${`Photo ${index + 1} of ${files.length}: ${title}`} onKeyDown=${this.onKey}>
       <div class="viewer-bar">
         <button class="ls-btn" type="button" onClick=${onClose} aria-label="Close viewer"><${Icon} name="close" /></button>
@@ -401,21 +490,21 @@ class Viewer extends Component {
         <button class="ls-btn nav" type="button" onClick=${() => this.go(1)} disabled=${index === files.length - 1} aria-label="Next photo"><${Icon} name="next" /></button>
       </div>
       <div class="track" ref=${el => { this.track = el; }} onScroll=${this.onScroll} tabindex="0" aria-label="Photos, swipe sideways">
-        ${files.map((f, i) => html`<div class="slide" key=${f.name}>${Math.abs(i - index) <= 2 && html`<img src=${viewSrc(f)} alt=${f.description || displayTitle(f.name)} decoding="async" />`}</div>`)}
+        ${files.map((f, i) => html`<div class="slide" key=${f.name}><${Slide} file=${f} distance=${Math.abs(i - index)} /></div>`)}
       </div>
       <div class="viewer-caption">
         <h2>${title}</h2>
         ${meta && html`<p class="meta">${meta}</p>`}
         <div class="actions">
           <button class="ls-btn ls-btn--small" type="button" aria-expanded=${details} onClick=${() => this.setState({ details: !details })} aria-label="Details"><${Icon} name="info" small /></button>
-          <button class="ls-btn ls-btn--small" type="button" onClick=${() => onShare(title, shareUrl(location.href, query, file.name))} aria-label="Share"><${Icon} name="share" small /></button>
+          <button class="ls-btn ls-btn--small" type="button" onClick=${() => onShare(title, shareHref(file))} aria-label="Share"><${Icon} name="share" small /></button>
           <a class="ls-btn ls-btn--small ls-btn--outbound" href=${file.page} target="_blank" rel="noopener noreferrer">Commons</a>
         </div>
         ${details && html`<dl class="details">
           ${file.description && html`<dt>Description</dt><dd>${file.description}</dd>`}
           <dt>Author</dt><dd>${file.author || 'Unknown'}</dd>
           <dt>Licence</dt><dd>${file.license || 'See Commons'}</dd>
-          <dt>Size</dt><dd>${file.width} × ${file.height} · <a href=${file.url} target="_blank" rel="noopener noreferrer">Original</a></dd>
+          <dt>${file.kind === 'image' ? 'Size' : 'File'}</dt><dd>${[file.width && file.height ? `${file.width} × ${file.height}` : '', file.duration ? formatTime(file.duration) : ''].filter(Boolean).join(' · ')}${file.width || file.duration ? ' · ' : ''}<a href=${file.url} target="_blank" rel="noopener noreferrer">Original</a></dd>
         </dl>`}
       </div>
     </dialog>`;

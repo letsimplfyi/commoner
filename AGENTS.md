@@ -49,7 +49,8 @@ under https://github.com/letsimplfyi. Read `../brand/AGENTS.md` for the brand's 
   `prefers-reduced-motion` and `prefers-color-scheme`.
 - **Privacy.** Commons requests are anonymous: `credentials: 'omit'`, `referrerPolicy: 'no-referrer'`, no API key. Only
   these things are stored, on the device: theme, the last 10 galleries, the donation preference, the cached Picture of the
-  day, and the service worker's app cache. Nothing is sent anywhere.
+  day, and the service worker's app cache. Nothing is sent anywhere. **Location**: the device position is asked for only when the
+  user taps Around me, rounded to about 100 m at once, sent to Commons only as the centre of a search, and never stored.
 - **Open data.** Photos keep their own licences, shown in the viewer. Commoner is **not affiliated with or endorsed by the
   Wikimedia Foundation**: never use Wikimedia/Commons logos or imitate their marks (their identity guidelines forbid it).
 
@@ -68,6 +69,7 @@ js/
   commons.js         pure Commons logic: parsing, the query model, URLs, normalisers, fetch helpers
   popular.js         the curated start list (generated from verified data) + helpers
   typeahead.js       the category box with live predictions (ARIA combobox)
+  near.js            Around me: ?near= address, the ordered nearby list and its details, places by name, the device position (pure + requests)
   feed.js            the Commons Picture of the day from the Wikimedia Feed API, cached per day
   support.js         donation rules and amounts (pure); the founder's UPI ID
   upi.js             UPI link building (pure)
@@ -110,7 +112,8 @@ The address is the application state, so every gallery is shareable and the Back
 | `c` (repeatable) | a category to **include**; every included category must match |
 | `x` (repeatable) | a category to **leave out** |
 | `d=1` / `d=0` | force subcategories on / off. Default: off for one plain category, **on** as soon as there is a second category or a leave-out |
-| `s=newest` | newest first (default is Commons order for one category, best match for a search) |
+| `s=newest` | most recently **uploaded** first (a search; default is Commons' own order for one category, best match for a search) |
+| `near` (+ `r`) | **Around me**: a place as `lat,lon` rounded to 3 decimals (about 100 m), and a distance of 1000, 5000 or 10000 m. `f` works with it. A bare `?near=` is the screen with no place yet |
 | `f` | a file name: opens the viewer on it (with no `c`, on that photo alone) |
 
 `parseRoute`, `shareUrl`, `makeQuery` in `js/commons.js` own this. `makeQuery` normalises (deduplicates, drops a leave-out that
@@ -144,7 +147,12 @@ Facts about the Commons API that cost time to learn, so do not relearn them:
   never larger than the original: the grid uses 500, the viewer 1280; `resize()` falls back to the original URL for small
   files and SVGs. Both hosts must stay in the CSP; the e2e suite enforces the real CSP so this cannot regress silently.
 - `prefixsearch` (namespace 14) powers predictions. It needs `origin=*` for CORS, like every call.
-- Non-image results (video, audio, PDFs) are skipped and counted ("n not photos").
+- **Every kind of file is shown**, not only pictures (the "Media of the day" category holds only video and audio). `prop=videoinfo` (imageinfo plus
+  `duration` and `derivatives`) answers for all of them; `mediaKind` sorts them into image, video, audio, document, other. Video and audio
+  play in the viewer, from Commons' transcodes first and the original last (the browser picks the first it supports); a video or audio
+  element exists only on the current slide, so swiping past never downloads. A PDF or DjVu shows its page thumbnail and a link; anything
+  else a link. **Audio has no thumbnail**: Commons' generic icon lives on `commons.wikimedia.org`, which the page does not load images
+  from, so such thumbnails are dropped and the tile shows our own icon. The CSP has `media-src` for `upload.wikimedia.org`.
 - Be gentle: debounce predictions (250 ms), cache nothing aggressively, never loop requests. Wikimedia rate-limits bursts
   ("too many requests"); `tools/check-popular.mjs` batches 40 titles with pauses for that reason.
 
@@ -162,7 +170,7 @@ Facts about the Commons API that cost time to learn, so do not relearn them:
 - `Support` is the donation sheet: the brand's `ls-sheet` bottom sheet in a native `<dialog>`.
 - `Typeahead` (`js/typeahead.js`) is a real ARIA combobox: input `role="combobox"`, a `role="listbox"` of `role="option"`,
   `aria-activedescendant`, arrow keys, Enter, Escape. It is used on the home page and in the Filter panel.
-- Home: the category box, the Picture of the day card, five start chips + Surprise me, a **More categories** fold,
+- Home: the category box, the Picture of the day card, five start chips + Surprise me + Around me, a **More categories** fold,
   Recent (max 5 shown, 10 kept). Gallery: Back, title, count, share (only where `navigator.share` exists), copy link, Filter,
   sort, the Filter panel (chips, Add / Leave out, a box, Subcategories), a Related fold (parents and subcategories of a
   single plain category), the grid, "More", and the donation prompt card when the rules allow.
@@ -186,6 +194,17 @@ One request a day to `https://api.wikimedia.org/feed/v1/wikipedia/en/featured/YY
 `image` field. The result is kept in `localStorage` until the date changes. Only Wikimedia image hosts are accepted by
 `normaliseImage`. The card opens that very photo in the viewer (`?f=<file name>`, no category, so it also works when the day's photo is not yet in
 the year's category); closing it returns home. If anything fails the card simply does not show.
+
+### Around me (`js/near.js`)
+
+The nearest photos to a place: the device position (asked only when the user taps **Around me**), or a place picked by name (a
+Commons category that has coordinates, so no geocoder and no new host). The position is **rounded to 3 decimals the moment it is
+read**, before any request, address or display, and is never stored or added to Recent. One `list=geosearch` request returns up to
+500 files nearest first with their distance (`gsprimary=all` also counts photos whose subject, not camera, is there); the photo
+details are then fetched 50 at a time with `pageids=`, so later pages need no new search. **A geosearch cannot be paged**: `gsoffset`
+works only on the list form and files at the same spot come back in any order, and `ggsoffset` is ignored by the generator.
+Commons allows at most 10 km. `Permissions-Policy` must say `geolocation=(self)` (it once said `()`, which blocks the feature).
+There is deliberately **no map**: tiles would be a third party that learns where the user is (see DESIGN.md).
 
 ### Support / donations (`js/support.js`, `js/upi.js`, `js/qr.js`)
 

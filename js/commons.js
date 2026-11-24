@@ -38,6 +38,9 @@ export function makeQuery({ cats = [], not = [], deep, sort = 'name' } = {}) {
 }
 const asQuery = q => (typeof q === 'string' ? makeQuery({ cats: [q] }) : makeQuery(q));
 export const usesSearch = q => { const x = asQuery(q); return x.deep || x.cats.length > 1 || x.not.length > 0; };
+// A plain category is listed in Commons' own order, but "newest" means the most recently uploaded file, which a category
+// listing cannot give (it orders by when a file was added to the category), so that case is a search.
+export const listsBySearch = q => { const x = asQuery(q); return usesSearch(x) || x.sort === 'newest'; };
 export const queryKey = q => { const x = asQuery(q); return JSON.stringify([x.cats, x.not, x.deep, x.sort]); };
 export const queryTitle = q => { const x = asQuery(q); return x.cats.join(' + ') + x.not.map(n => ` − ${n}`).join(''); };
 
@@ -72,7 +75,9 @@ export function shareUrl(origin, q, fileName = '') {
 }
 
 const api = params => `${COMMONS_API}?${new URLSearchParams({ action: 'query', format: 'json', formatversion: '2', origin: '*', ...params })}`;
-const IMAGE_INFO = { prop: 'imageinfo', iiprop: 'url|size|mime|extmetadata', iiurlwidth: String(GRID_WIDTH), iiextmetadatafilter: 'ImageDescription|Artist|LicenseShortName|DateTimeOriginal' };
+export const apiUrl = api;
+// videoinfo is imageinfo plus what video and audio need (duration, playable versions); it answers for images too.
+const IMAGE_INFO = { prop: 'videoinfo', viprop: 'url|size|mime|mediatype|duration|derivatives|extmetadata', viurlwidth: String(GRID_WIDTH), viextmetadatafilter: 'ImageDescription|Artist|LicenseShortName|DateTimeOriginal' };
 
 // One category, nothing else: the category page itself, its subcategories and its parents.
 export function infoUrl(name) {
@@ -90,7 +95,7 @@ export const countUrl = q => api({ list: 'search', srsearch: searchTerm(q), srna
 export function listUrl(q, { sort, cont = null } = {}) {
   const x = asQuery({ ...asQuery(q), sort: sort ?? asQuery(q).sort });
   const newest = x.sort === 'newest';
-  if (usesSearch(x)) {
+  if (listsBySearch(x)) {
     return api({ generator: 'search', gsrsearch: searchTerm(x), gsrnamespace: '6', gsrlimit: String(PAGE_SIZE), gsrsort: newest ? 'create_timestamp_desc' : 'relevance', ...IMAGE_INFO, ...(cont || {}) });
   }
   return api({ list: 'categorymembers', cmtitle: categoryTitle(x.cats[0]), cmtype: 'file', cmlimit: String(PAGE_SIZE), cmprop: 'ids|title', cmsort: newest ? 'timestamp' : 'sortkey', cmdir: newest ? 'desc' : 'asc', ...(cont || {}) });
@@ -108,6 +113,7 @@ export const normaliseSuggestions = json => (json?.query?.prefixsearch || []).ma
 
 // Wikimedia refuses thumbnails larger than the original.
 export function resize(file, width) {
+  if (file.kind && file.kind !== 'image') return file.thumb ? file.thumb.replace(/\/\d+px-([^/]+)$/, `/${width}px-$1`) : ''; // a video poster or a page of a document; none for audio
   if (file.mime === 'image/svg+xml' || !file.thumb || file.width <= width) return file.url;
   return file.thumb.replace(/\/\d+px-([^/]+)$/, `/${width}px-$1`);
 }
@@ -118,16 +124,32 @@ const ENTITIES = { '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;
 export const plain = html => String(html ?? '').replace(/<[^>]*>/g, '').replace(/&(?:amp|lt|gt|quot|#0?39|nbsp);/g, e => ENTITIES[e]).replace(/\s+/g, ' ').trim();
 export const displayTitle = name => name.replace(/\.[A-Za-z0-9]{2,5}$/, '').replace(/_/g, ' ');
 
+const AUDIO_EXT = /\.(ogg|oga|opus|mp3|flac|wav|mid|midi|m4a)$/i, VIDEO_EXT = /\.(ogv|webm|mp4|mpg|mpeg)$/i;
+// image, video, audio, document (PDF, DjVu: a page thumbnail and a link) or other (3D, archives: a link only)
+export function mediaKind(info, name) {
+  const type = String(info?.mediatype || '').toUpperCase();
+  if (type === 'VIDEO') return 'video';
+  if (type === 'AUDIO') return 'audio';
+  if (type === 'OFFICE') return 'document';
+  if (/^image\//.test(info?.mime || '')) return 'image';
+  if (VIDEO_EXT.test(name)) return 'video';
+  if (AUDIO_EXT.test(name)) return 'audio';
+  return 'other';
+}
+const FROM_WIKIMEDIA = /^https:\/\/upload\.wikimedia\.org\//;
 export function normaliseFiles(json) {
   const pages = (json?.query?.pages || []).slice().sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
   const files = [];
   for (const page of pages) {
-    const info = page.imageinfo?.[0];
-    if (!info || !/^image\//.test(info.mime || '')) continue;
+    const info = page.videoinfo?.[0] || page.imageinfo?.[0];
+    if (!info || !info.url) continue;
     const meta = info.extmetadata || {};
     const name = page.title.replace(/^File:/, '');
     files.push({
-      title: page.title, name, url: info.url, thumb: info.thumburl || '', width: info.width, height: info.height, mime: info.mime,
+      id: page.pageid, title: page.title, name, kind: mediaKind(info, name), url: info.url,
+      thumb: /file-type-icons/.test(info.thumburl || '') ? '' : info.thumburl || '', // Commons' generic icons come from a host the page does not use
+      width: info.width, height: info.height, mime: info.mime, duration: info.duration || 0,
+      sources: (info.derivatives || []).filter(d => FROM_WIKIMEDIA.test(d.src || '')).map(d => ({ src: d.src, type: d.type })), // versions a browser can play
       description: plain(meta.ImageDescription?.value), author: plain(meta.Artist?.value), license: plain(meta.LicenseShortName?.value),
       date: plain(meta.DateTimeOriginal?.value), page: pageUrl(page.title),
     });
@@ -182,7 +204,7 @@ export async function fetchInfo(q, options) {
 }
 export async function fetchFiles(q, { sort, cont, ...options } = {}) {
   const url = listUrl(q, { sort, cont });
-  if (usesSearch(q)) return normaliseFiles(await getJson(url, options));
+  if (listsBySearch(q)) return normaliseFiles(await getJson(url, options));
   const members = await getJson(url, options);
   const ids = (members.query?.categorymembers || []).map(m => m.pageid), next = members.continue || null;
   if (!ids.length) return { files: [], next, skipped: 0 };

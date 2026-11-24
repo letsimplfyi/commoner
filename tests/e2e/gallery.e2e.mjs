@@ -27,12 +27,20 @@ test.after(async () => { await browser.close(); server.close(); });
 
 const NAMES = ['Alpha one.jpg', 'Bravo two.jpg', 'Charlie three.jpg', 'Delta four.jpg', 'Echo five.jpg'];
 const MISSING = ['Category:Nope', 'Category:Swayambhunat'];
+const MEDIA = ['Clip.ogv', 'Song.ogg', 'Paper.pdf'];
+const NEARBY = [[0, 20], [1, 80], [2, 150], [3, 1400], [4, 4900]]; // [index in NAMES, metres]
+const mediaPage = (id, name) => {
+  const base = { pageid: id, ns: 6, title: `File:${name}`, index: id - 2000 };
+  if (name === 'Clip.ogv') return { ...base, videoinfo: [{ url: 'https://upload.wikimedia.org/c/Clip.ogv', mime: 'application/ogg', mediatype: 'VIDEO', duration: 96.9, width: 400, height: 288, thumburl: 'https://thumb.wikimedia.org/thumb/c/Clip.ogv/500px--Clip.ogv.jpg', derivatives: [{ src: 'https://upload.wikimedia.org/c/Clip.ogv.240p.webm', type: 'video/webm; codecs="vp9, opus"' }], extmetadata: {} }] };
+  if (name === 'Song.ogg') return { ...base, videoinfo: [{ url: 'https://upload.wikimedia.org/s/Song.ogg', mime: 'application/ogg', mediatype: 'AUDIO', duration: 67, thumburl: 'https://commons.wikimedia.org/w/resources/assets/file-type-icons/fileicon-ogg.png', derivatives: [{ src: 'https://upload.wikimedia.org/s/Song.ogg.mp3', type: 'audio/mpeg' }], extmetadata: {} }] };
+  return { ...base, videoinfo: [{ url: 'https://upload.wikimedia.org/p/Paper.pdf', mime: 'application/pdf', mediatype: 'OFFICE', thumburl: 'https://thumb.wikimedia.org/thumb/p/Paper.pdf/page1-500px-Paper.pdf.jpg', extmetadata: {} }] };
+};
 const IMG = '<svg xmlns="http://www.w3.org/2000/svg" width="500" height="500"><rect width="500" height="500" fill="#888"/></svg>';
 const FEED = { image: { title: 'File:Pointe Saint Mathieu - Phare.jpg', thumbnail: { source: 'https://upload.wikimedia.org/p/640px-Pointe.jpg', width: 640, height: 427 }, image: { source: 'https://upload.wikimedia.org/p/Pointe.jpg', width: 4000, height: 2667 },
   description: { text: 'View of the lighthouse' }, artist: { text: 'JackyM59' }, license: { type: 'CC BY-SA 4.0' } } };
 
-async function open(path = '/', { viewport = { width: 390, height: 780 }, commons, workers = 'block', storage = {} } = {}) {
-  const context = await browser.newContext({ viewport, hasTouch: true, serviceWorkers: workers });
+async function open(path = '/', { viewport = { width: 390, height: 780 }, commons, workers = 'block', storage = {}, geolocation } = {}) {
+  const context = await browser.newContext({ viewport, hasTouch: true, serviceWorkers: workers, ...(geolocation ? { geolocation, permissions: ['geolocation'] } : {}) });
   await context.addInitScript(entries => { if (sessionStorage.getItem('seeded')) return; sessionStorage.setItem('seeded', '1'); for (const [k, v] of Object.entries(entries)) localStorage.setItem(k, v); }, storage);
   const page = await context.newPage();
   const outside = [], violations = [], seen = [];
@@ -50,13 +58,20 @@ async function open(path = '/', { viewport = { width: 390, height: 780 }, common
         return route.fulfill({ json: { query: { prefixsearch: q.startsWith('sw') ? [{ title: 'Category:Swayambhunath' }, { title: 'Category:Swayambhu Ganpati Temple' }] : [] } } });
       }
       if (p.get('list') === 'search') return route.fulfill({ json: { query: { searchinfo: { totalhits: 5 }, search: [] } } });
-      if (p.get('list') === 'categorymembers' && p.get('cmtype') === 'file') { // a plain category: the ordered member list (name order, or newest first)
+      if (p.get('list') === 'geosearch') { // Around me: the nearest files, with how far each is
+        const within = NEARBY.filter(([, m]) => m <= Number(p.get('gsradius')));
+        return route.fulfill({ json: { query: { geosearch: within.map(([i, m]) => ({ pageid: 1001 + i, ns: 6, title: `File:${NAMES[i]}`, lat: 27.715, lon: 85.29, dist: m, primary: '' })) } } });
+      }
+      if (p.get('prop') === 'coordinates') return route.fulfill({ json: { query: { pages: [p.get('titles') === 'Category:Swayambhunath' ? { title: p.get('titles'), coordinates: [{ lat: 27.714912, lon: 85.290412, primary: true }] } : { title: p.get('titles') }] } } });
+      if (p.get('list') === 'categorymembers' && p.get('cmtype') === 'file' && p.get('cmtitle') === 'Category:Media cat') return route.fulfill({ json: { batchcomplete: true, query: { categorymembers: MEDIA.map((n, i) => ({ pageid: 2001 + i, ns: 6, title: `File:${n}` })) } } });
+      if (p.get('list') === 'categorymembers' && p.get('cmtype') === 'file') { // a plain category: the ordered member list (name order)
         if (MISSING.concat(['Category:Empty']).includes(p.get('cmtitle'))) return route.fulfill({ json: { batchcomplete: true, query: { categorymembers: [] } } });
         const ordered = p.get('cmsort') === 'timestamp' ? [...NAMES].reverse() : NAMES, more = p.has('cmcontinue');
         const names = more ? ordered.slice(3) : ordered.slice(0, 3);
         return route.fulfill({ json: { batchcomplete: true, ...(more ? {} : { continue: { cmcontinue: 'file|X|1', continue: '-||' } }), query: { categorymembers: names.map(n => ({ pageid: 1001 + NAMES.indexOf(n), ns: 6, title: `File:${n}` })) } } });
       }
       if (p.has('pageids')) { // the photo details for those ids, returned in the opposite order on purpose
+        if (p.get('pageids').split('|').some(id => Number(id) >= 2001)) return route.fulfill({ json: { query: { pages: p.get('pageids').split('|').map(id => mediaPage(Number(id), MEDIA[Number(id) - 2001])).reverse() } } });
         const names = p.get('pageids').split('|').map(id => NAMES[Number(id) - 1001]);
         return route.fulfill({ json: { query: { pages: names.map(n => filePage(NAMES.indexOf(n) + 1, n)).reverse() } } });
       }
@@ -65,6 +80,7 @@ async function open(path = '/', { viewport = { width: 390, height: 780 }, common
         const title = p.get('gcmtitle');
         if (MISSING.concat(['Category:Empty']).includes(title)) return route.fulfill({ json: { batchcomplete: true, query: { pages: [] } } });
         const more = p.has('gcmcontinue') || p.has('gsroffset');
+        if (p.get('gsrsort') === 'create_timestamp_desc' && p.get('gsrsearch')?.startsWith('incategory:')) { const newest = [...NAMES].reverse(); return route.fulfill({ json: more ? listResponse(newest.slice(3)) : listResponse(newest.slice(0, 3), { gsroffset: 50, continue: 'gsroffset||' }) }); } // newest = most recently uploaded
         return route.fulfill({ json: more ? listResponse(NAMES.slice(3)) : listResponse(NAMES.slice(0, 3), p.get('generator') === 'search' ? { gsroffset: 50, continue: 'gsroffset||' } : { gcmcontinue: 'file|X|1', continue: 'gcmcontinue||' }) });
       }
       const titles = p.get('titles').split('|');
@@ -276,8 +292,7 @@ test('sorting: Name and Newest each put the photos in the order Commons lists th
   await page.getByRole('button', { name: 'Newest' }).click();
   await page.waitForFunction(() => location.search.includes('s=newest'));
   assert.deepEqual(await all(), ['Echo five', 'Delta four', 'Charlie three', 'Bravo two', 'Alpha one']);
-  assert.ok(seen.some(q => q.list === 'categorymembers' && q.cmsort === 'timestamp' && q.cmdir === 'desc'), 'newest asks Commons for the newest first');
-  assert.ok(seen.some(q => q.pageids === '1005|1004|1003'), 'the details are asked for in that same order');
+  assert.ok(seen.some(q => q.generator === 'search' && q.gsrsort === 'create_timestamp_desc' && q.gsrsearch === 'incategory:"Test cat"'), 'newest means the most recently uploaded, which only a search can order by');
   await page.getByRole('button', { name: 'Name' }).click();
   await page.waitForFunction(() => !location.search.includes('s=newest'));
   assert.deepEqual(await all(), ['Alpha one', 'Bravo two', 'Charlie three', 'Delta four', 'Echo five']);
@@ -351,5 +366,77 @@ test('updates: a new release installs in the background, the idle page restarts 
   assert.match(page.url(), /&f=Bravo\+two\.jpg$/);
   await page.getByText('Updated to 2').waitFor();
   assert.deepEqual(await page.evaluate(() => caches.keys()), ['commoner-shell-v2'], 'the old cache is gone');
+  await context.close();
+});
+
+test('media: videos, audio and documents are shown, play where the browser can, and never fetch from a host the page does not use', async () => {
+  const { page, context, outside, violations } = await open('/?c=Media+cat');
+  await page.waitForFunction(() => document.querySelectorAll('.tile').length === 3);
+  assert.deepEqual(await page.locator('.tile').evaluateAll(els => els.map(e => e.getAttribute('aria-label'))), ['Clip, video', 'Song, audio', 'Paper, document']);
+  assert.equal(await page.locator('.tile .badge').count(), 3);
+  assert.equal(await page.locator('.tile').nth(1).locator('img').count(), 0, "audio has no picture: Commons' generic icon is a host the page does not use");
+  assert.equal(await page.locator('.tile').nth(0).locator('img').getAttribute('src'), 'https://thumb.wikimedia.org/thumb/c/Clip.ogv/500px--Clip.ogv.jpg');
+
+  await page.locator('.tile').nth(0).click();
+  const dialog = page.locator('dialog.viewer');
+  await dialog.waitFor();
+  const video = dialog.locator('video[controls]');
+  await video.waitFor();
+  assert.deepEqual(await video.locator('source').evaluateAll(els => els.map(e => e.getAttribute('src'))), ['https://upload.wikimedia.org/c/Clip.ogv.240p.webm', 'https://upload.wikimedia.org/c/Clip.ogv'], 'the transcode first, then the original');
+  assert.equal(await dialog.locator('audio').count(), 0, 'only the current slide gets a player');
+  await page.getByRole('button', { name: 'Details' }).click();
+  await dialog.getByText('1:37').waitFor(); // the duration
+  await page.keyboard.press('ArrowRight');
+  const audio = dialog.locator('audio[controls]');
+  await audio.waitFor();
+  assert.deepEqual(await audio.locator('source').evaluateAll(els => els.map(e => e.getAttribute('src'))), ['https://upload.wikimedia.org/s/Song.ogg.mp3', 'https://upload.wikimedia.org/s/Song.ogg']);
+  assert.equal(await dialog.locator('video').count(), 0, 'swiping on stops and removes the video');
+  await page.keyboard.press('ArrowRight');
+  const openLink = dialog.getByRole('link', { name: 'Open the file' });
+  await openLink.waitFor();
+  assert.equal(await openLink.getAttribute('href'), 'https://upload.wikimedia.org/p/Paper.pdf');
+  assert.deepEqual(outside, [], 'nothing leaves for a host outside the allowed list');
+  assert.deepEqual(violations, [], 'the CSP allows media from the Wikimedia upload host');
+  await context.close();
+});
+
+test('around me: the device position is rounded, the nearest photos come first with their distance, wider distances widen it, and the address can be shared', async () => {
+  const { page, context, seen, outside, violations } = await open('/', { geolocation: { latitude: 27.714912345, longitude: 85.290412345 } });
+  await page.getByRole('button', { name: 'Around me' }).click();
+  await page.waitForFunction(() => document.querySelectorAll('.tile').length === 3);
+  assert.match(page.url(), /\?near=27\.715(?:%2C|,)85\.290$/);
+  assert.deepEqual(await page.locator('.tile').evaluateAll(els => els.map(e => e.getAttribute('aria-label'))), ['Alpha one', 'Bravo two', 'Charlie three'], 'nearest first, though the details came back reversed');
+  const sent = seen.map(q => q.gscoord).filter(Boolean);
+  assert.ok(sent.length > 0 && sent.every(c => c === '27.715|85.29'), 'only the rounded position is ever sent: ' + sent.join(' '));
+  assert.ok(seen.some(q => q.list === 'geosearch' && q.gsradius === '1000' && q.gslimit === '500' && q.gsnamespace === '6'));
+  await page.locator('.tile').first().click();
+  await page.locator('dialog.viewer').waitFor();
+  await page.getByText(/20 m ·/).waitFor();
+  await page.keyboard.press('Escape');
+  await page.locator('dialog.viewer').waitFor({ state: 'detached' });
+  await page.getByRole('button', { name: '5 km' }).click();
+  await page.waitForFunction(() => document.querySelectorAll('.tile').length === 5);
+  assert.match(page.url(), /near=27\.715(?:%2C|,)85\.290&r=5000/);
+  assert.equal(await page.evaluate(() => localStorage.getItem('commoner-recent')), null, 'where someone stands is not kept as a recent gallery');
+  await page.goto(page.url()); // the shared link needs no permission: it holds the rounded place
+  await page.waitForFunction(() => document.querySelectorAll('.tile').length === 5);
+  await back(page).click();
+  await page.getByLabel('Category').waitFor();
+  assert.deepEqual(outside, []); assert.deepEqual(violations, []);
+  await context.close();
+});
+
+test('around me: when location is off, it says so and a place can be picked by name instead', async () => {
+  const { page, context, seen } = await open('/');
+  await page.getByRole('button', { name: 'Around me' }).click();
+  await page.getByText('Location is off for Commoner. Pick a place instead.').waitFor();
+  await page.getByLabel('Place', { exact: true }).fill('sw');
+  await page.getByRole('option', { name: 'Swayambhu Ganpati Temple' }).click(); // a category with no coordinates
+  await page.getByText('That place has no location on Commons.').waitFor();
+  await page.getByLabel('Place', { exact: true }).fill('sw');
+  await page.getByRole('option', { name: 'Swayambhunath', exact: true }).click();
+  await page.waitForFunction(() => document.querySelectorAll('.tile').length === 3);
+  assert.match(page.url(), /\?near=27\.715(?:%2C|,)85\.290$/);
+  assert.ok(seen.filter(q => q.gscoord).every(q => q.gscoord === '27.715|85.29'));
   await context.close();
 });

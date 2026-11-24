@@ -2,5 +2,5 @@
   Cache-Control: public, no-cache, no-transform
   X-Content-Type-Options: nosniff
   Referrer-Policy: no-referrer
-  Permissions-Policy: camera=(), microphone=(), geolocation=()
-  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; manifest-src 'self'; img-src 'self' data: https://upload.wikimedia.org https://thumb.wikimedia.org; connect-src 'self' https://commons.wikimedia.org https://api.wikimedia.org; base-uri 'none'; form-action 'self'; frame-ancestors 'none'
+  Permissions-Policy: camera=(), microphone=(), geolocation=(self)
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; manifest-src 'self'; img-src 'self' data: https://upload.wikimedia.org https://thumb.wikimedia.org; media-src 'self' https://upload.wikimedia.org; connect-src 'self' https://commons.wikimedia.org https://api.wikimedia.org; base-uri 'none'; form-action 'self'; frame-ancestors 'none'

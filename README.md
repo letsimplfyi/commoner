@@ -8,7 +8,7 @@ https://commoner.letsimpl.fyi/?c=Photos taken by Vysakh Premkumar
 https://commoner.letsimpl.fyi/?c=Nepal&c=Sunsets&x=Kathmandu&s=newest
 ```
 
-`c` is a category (repeat it to narrow down: every one must match), `x` leaves one out, `s=newest` sorts newest first,
+`c` is a category (repeat it to narrow down: every one must match), `x` leaves one out, `s=newest` sorts the most recently uploaded first (the default is Commons' own order), `near=27.715,85.290` shows the photos around a place (rounded to about 100 m; `r=5000` widens it),
 `d=1` or `d=0` forces subcategories on or off, `f=File name.jpg` opens the viewer on one photo (on its own when there is no `c`). The home page shows the
 Commons Picture of the day and a start list; typing predicts categories; **Filter** in a gallery adds or removes categories.
 
